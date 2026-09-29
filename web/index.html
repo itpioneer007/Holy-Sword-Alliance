@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>圣剑挂机 · 任务控制台</title>
+<style>
+  :root{
+    --green:#16a34a; --green-d:#15803d; --green-l:#dcfce7; --green-xl:#f0fdf4;
+    --teal:#0f766e; --teal-l:#ccfbf1;
+    --bg:#eef2ee; --card:#ffffff; --line:#dde5de;
+    --text:#1f2937; --muted:#6b7280;
+    --amber:#d97706; --amber-l:#fef3c7;
+    --red:#dc2626; --red-l:#fee2e2;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);
+       font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;font-size:14px}
+  .wrap{max-width:1220px;margin:0 auto;padding:18px 20px 60px}
+
+  /* ---------- 顶栏 ---------- */
+  header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .logo{font-size:20px;font-weight:700;letter-spacing:.5px}
+  .logo span{color:var(--green)}
+  .chip{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;
+        background:#fff;border:1px solid var(--line);color:var(--muted);font-size:12px}
+  .chip b{color:var(--green-d)}
+  .dot{width:8px;height:8px;border-radius:50%;background:#9ca3af;display:inline-block}
+  .dot.ok{background:var(--green)}
+  .dot.bad{background:var(--red)}
+  .dot.warn{background:var(--amber)}
+  .spacer{flex:1}
+
+  /* ---------- 卡片 ---------- */
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  @media (max-width:1280px){.grid{grid-template-columns:repeat(2,1fr)}}
+  @media (max-width:640px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+        padding:16px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .card h2{font-size:15px;display:flex;align-items:center;gap:8px;margin-bottom:4px}
+  .tag{font-size:11px;padding:1px 8px;border-radius:999px;background:var(--green-l);
+       color:var(--green-d);font-weight:600;white-space:nowrap}
+  .tag.rank{background:var(--teal-l);color:var(--teal)}
+  .tag.gray{background:#eef0f2;color:var(--muted)}
+  .tag.glory{background:#f5e8c8;color:#8a6a1a}
+  .desc{color:var(--muted);font-size:12px;line-height:1.6;margin-bottom:12px;min-height:52px}
+  .desc b.warn{color:var(--amber)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .btn{border:0;border-radius:10px;padding:9px 18px;font-size:14px;font-weight:600;
+       cursor:pointer;color:#fff;background:var(--green);transition:filter .15s}
+  .btn:hover{filter:brightness(1.06)}
+  .btn:disabled{background:#c3cbc4;cursor:not-allowed}
+  .btn.red{background:var(--red)}
+  .btn.ghost{background:#fff;color:var(--muted);border:1px solid var(--line);font-weight:500}
+  .btn.ghost:hover{border-color:var(--green);color:var(--green-d)}
+  .btn.sm{padding:3px 10px;font-size:12px}
+  .num{width:84px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;
+       font-size:14px;text-align:center;color:var(--text)}
+  .num:focus{outline:2px solid var(--green-l);border-color:var(--green)}
+  .txt{width:132px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;
+       font-size:13px;text-align:center;color:var(--text)}
+  .txt:focus{outline:2px solid var(--green-l);border-color:var(--green)}
+
+  /* 预约启动 (到点自动开打) */
+  .schedrow{margin-top:9px;padding-top:9px;border-top:1px dashed var(--line)}
+  .schedrow .lbl{font-size:12px;font-weight:600;color:var(--muted);white-space:nowrap}
+  .schedrow .hint{font-size:11.5px;color:#9ca3af}
+  .schedbox{display:none;margin-top:8px;border-radius:10px;padding:8px 11px;
+            font-size:12px;line-height:1.65}
+  .schedbox.on{display:block}
+  .schedbox.s-live{background:var(--green-l);border:1px solid #bbf7d0;color:var(--green-d)}
+  .schedbox.s-wait{background:var(--amber-l);border:1px solid #fde68a;color:#92400e}
+  .schedbox.l-live{background:var(--green-xl);border:1px solid #bbf7d0;color:var(--green-d)}
+  .schedbox.l-err{background:var(--red-l);border:1px solid #fecaca;color:var(--red)}
+
+  /* 任务运行中的实时面板 */
+  .live{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;display:none}
+  .live.on{display:block}
+  .phase{font-weight:600;color:var(--green-d);font-size:13px;margin-bottom:8px;
+         display:flex;align-items:center;gap:8px}
+  .pulse{width:9px;height:9px;border-radius:50%;background:var(--green);animation:pl 1s infinite;flex:none}
+  @keyframes pl{50%{opacity:.25}}
+  .stat{display:flex;gap:10px;font-size:12px;color:var(--muted)}
+  .stat b{font-size:16px;color:var(--text);display:block}
+  .stat>div{flex:1}
+  .detail{font-size:12px;color:var(--muted);margin-top:8px;word-break:break-all;min-height:14px}
+  .detail.hot{color:var(--green-d);font-weight:600}
+
+  /* 任务结束后的常驻结果条 */
+  .result{display:none;margin-top:10px;border-top:1px dashed var(--line);padding-top:10px}
+  .result.on{display:block}
+  .resbar{border-radius:10px;padding:9px 12px;font-size:12.5px;line-height:1.7}
+  .resbar b{font-size:13px}
+  .res-done{background:var(--green-l);border:1px solid #bbf7d0;color:var(--green-d)}
+  .res-err{background:var(--red-l);border:1px solid #fecaca;color:var(--red)}
+  .resbar .muted{color:var(--muted)}
+
+  /* ---------- 下栏 ---------- */
+  .lower{display:grid;grid-template-columns:360px 1fr;gap:14px;margin-top:14px}
+  @media (max-width:1000px){.lower{grid-template-columns:1fr}}
+  .pillar{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);
+          border-radius:10px;margin-bottom:8px;font-size:13px}
+  .pillar .cnt{margin-left:auto;font-weight:700;color:var(--green-d);margin-right:4px}
+  .listbox{max-height:150px;overflow:auto;background:var(--green-xl);border-radius:10px;
+           padding:8px 10px;font-size:12px;color:var(--muted);display:none;line-height:1.7;
+           white-space:pre-wrap;margin-bottom:8px}
+  .listbox.on{display:block}
+
+  /* 最近任务历史 */
+  #hist{display:flex;flex-direction:column;gap:6px;max-height:250px;overflow:auto;margin-top:4px}
+  .hrow{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--line);
+        border-radius:9px;font-size:12px;flex-wrap:wrap}
+  .hrow .hm{margin-left:auto;color:var(--muted);font-size:11px;white-space:nowrap}
+  .mini{font-size:10.5px;padding:1px 7px;border-radius:999px;font-weight:600;flex:none}
+  .mini.arena{background:var(--green-l);color:var(--green-d)}
+  .mini.rank{background:var(--teal-l);color:var(--teal)}
+  .mini.rank_glory{background:#f5e8c8;color:#8a6a1a}
+  .mini.collect{background:#eef0f2;color:var(--muted)}
+  .mini.done{background:var(--green);color:#fff}
+  .mini.error{background:var(--red);color:#fff}
+  .hsum{color:var(--text);font-weight:500}
+  .hreason{color:var(--muted)}
+  .empty{color:#9ca3af;font-size:12px;padding:8px 2px}
+
+  /* 日志 */
+  .logcard{display:flex;flex-direction:column}
+  .loghead{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13px;color:var(--muted)}
+  .loghead .spacer{flex:1}
+  #log{flex:1;min-height:230px;max-height:420px;overflow-y:auto;background:#111827;
+       color:#d1d5db;border-radius:10px;padding:10px 12px;font-family:Consolas,Menlo,monospace;
+       font-size:12px;line-height:1.8}
+  #log .ts{color:#6b7280;margin-right:6px}
+  #log .lv-ok{color:#4ade80;font-weight:600}
+  #log .lv-warn{color:#fbbf24}
+  #log .lv-error{color:#f87171;font-weight:600}
+  #log .lv-info{color:#cbd5e1}
+  #log .key{background:rgba(255,255,255,.06);border-left:2px solid #4ade80;
+            padding-left:6px;margin:2px 0;border-radius:2px}
+  #log .warnline{color:#fbbf24}
+  #banner{display:none;margin-bottom:14px;padding:11px 14px;border-radius:12px;font-size:13px;font-weight:600}
+  #banner.on{display:block}
+  .banner-done{background:var(--green-l);color:var(--green-d);border:1px solid #bbf7d0}
+  .banner-err{background:var(--red-l);color:var(--red);border:1px solid #fecaca}
+  .banner-warn{background:var(--amber-l);color:#92400e;border:1px solid #fde68a}
+  /* 上次任务结论条 (2026-09-22): 人不在时停了, 回来"一眼看到为什么停" */
+  #jobStrip{display:none;margin-bottom:14px;padding:11px 14px;border-radius:12px;
+            font-size:13px;line-height:1.65;border:1px solid var(--line);
+            background:var(--green-xl);color:var(--text)}
+  #jobStrip.on{display:block}
+  #jobStrip.bad{background:var(--red-l);border-color:#fecaca}
+  #jobStrip .jt{font-weight:700}
+  #jobStrip .jc{color:var(--muted)}
+  #jobStrip.bad .jt,#jobStrip.bad .jc{color:var(--red)}
+  #jobStrip .jh{display:block;margin-top:5px;font-size:12px;color:var(--muted)}
+  #jobStrip.bad .jh{color:#b91c1c}
+  .warn-box{background:var(--amber-l);border:1px solid #fde68a;color:#92400e;
+            font-size:12px;border-radius:10px;padding:8px 10px;margin-bottom:10px;display:none;line-height:1.5}
+  .warn-box.on{display:block}
+  .foot{text-align:center;color:#9ca3af;font-size:12px;margin-top:18px;line-height:1.7}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ================= 顶栏 ================= -->
+  <header>
+    <div class="logo">圣剑<span>挂机</span> · 任务控制台</div>
+    <div class="spacer"></div>
+    <div class="chip"><span class="dot ok" id="devDot"></span><span id="devTxt">检测中…</span></div>
+    <div class="chip"><span class="dot warn" id="winDot"></span><span id="winTxt">检测中…</span></div>
+    <div class="chip">本周积分 <b id="ptsTxt">–</b>&nbsp;/&nbsp;<span id="capTxt">6000</span></div>
+    <div class="chip">今日模型调用 <b id="llmTxt">–</b>&nbsp;/&nbsp;<span id="llmCapTxt">–</span></div>
+    <div class="chip">档案 <b id="dbTxt">–</b></div>
+  </header>
+
+  <!-- 任务结束横幅 -->
+  <div id="banner"></div>
+
+  <!-- 上次任务结论: 终止原因一眼可见 (2026-09-22, 数据来自 /api/status 的 last_job) -->
+  <div id="jobStrip"></div>
+
+  <!-- ================= 任务操作台 ================= -->
+  <div class="grid">
+
+    <!-- 全民争霸 -->
+    <div class="card">
+      <h2>全民争霸自动赛 <span class="tag">一键开打</span></h2>
+      <div class="desc">每周六/日 16:00–17:00 开放。自动从主城进入列表 → 只打打得过与陌生首战 → 10s 后跳过 → OCR 判胜负回写名单 → 有行动力连打、行动力耗尽后每分钟 1 场，直到窗口结束 / 周积分 6000 / 手动停止。<br><b class="warn">可用下方「预约启动」在开赛前把时间约好，到点自动开打。</b></div>
+      <div class="warn-box" id="arenaWarn"></div>
+      <div class="row">
+        <button class="btn" id="arenaStart">开始挂机</button>
+        <button class="btn red" id="arenaStop" disabled>停止</button>
+      </div>
+      <div class="row schedrow">
+        <span class="lbl">预约启动</span>
+        <input type="text" class="txt" id="arenaWhen" placeholder="16:00 或 30(分钟后)">
+        <button class="btn ghost sm" id="arenaSchedBtn">预约</button>
+        <span class="hint">到点自动开打；未到窗口则等窗口开启（仅当日有效）</span>
+      </div>
+      <div class="schedbox" id="arenaSchedBox"></div>
+      <div class="live" id="arenaLive">
+        <div class="phase"><span class="pulse"></span><span id="arenaPhase">运行中…</span></div>
+        <div class="stat">
+          <div>已打<b id="arenaFought">0</b></div>
+          <div>胜利<b id="arenaWins">0</b></div>
+          <div>战败<b id="arenaLosses">0</b></div>
+          <div>异常<b id="arenaErrors">0</b></div>
+        </div>
+        <div class="detail" id="arenaDetail"></div>
+      </div>
+      <div class="result" id="arenaResult"></div>
+    </div>
+
+    <!-- 排位赛 · 日常 -->
+    <div class="card">
+      <h2>日常排位 <span class="tag rank">随时可打</span></h2>
+      <div class="desc">自动从主城导航到荣耀排位赛 → 点「单人匹配」等系统匹 5v5（约 3 分钟一场）→ 跳过 → 领第三个宝箱 → 回大厅 = 1 局。打满场数即停，胜负由结算/战绩页 OCR 统计。每日累计上限 <b>30 把</b>（游戏规则，18-20 点荣耀时刻不受限），场数最多填 30；即便如此，若检测到「今日已累计挑战30次」弹窗，脚本会自动停止并提示。<b class="warn">荣耀时刻（18-20）系统自动参赛，此模式会自动禁用，请用右侧「荣耀时刻挂机」卡。</b></div>
+      <div class="warn-box" id="rankWarn"></div>
+      <div class="row">
+        <input type="number" class="num" id="rankRounds" value="5" min="1" max="30">
+        <span style="color:var(--muted);font-size:13px">场</span>
+        <button class="btn" id="rankStart" disabled>开始打</button>
+        <button class="btn red" id="rankStop" disabled>停止</button>
+      </div>
+      <div class="live" id="rankLive">
+        <div class="phase"><span class="pulse"></span><span id="rankPhase">运行中…</span></div>
+        <div class="stat">
+          <div>已打<b id="rankFought">0</b>&nbsp;/&nbsp;<span id="rankTarget">0</span></div>
+          <div>胜利<b id="rankWins">0</b></div>
+          <div>战败<b id="rankLosses">0</b></div>
+          <div>异常<b id="rankErrors">0</b></div>
+        </div>
+        <div class="detail" id="rankDetail"></div>
+      </div>
+      <div class="result" id="rankResult"></div>
+    </div>
+
+    <!-- 排位赛 · 荣耀时刻 -->
+    <div class="card">
+      <h2>荣耀时刻挂机 <span class="tag glory">每日 18-20</span></h2>
+      <div class="desc">每晚 18:00-20:00 系统自动参赛（需游戏内已勾「自动参与」），无需点单人匹配。引擎只做：等跳过出现 → 跳过 → 领第三宝箱 → 比赛结束 → 返回大厅 = 1 局。<b class="warn">填 0 场 = 一直挂到 20:00 窗口结束自动收尾。</b><br><b class="warn">人不在？用下方「预约启动」提前约好 18:00，到点自动开打。</b></div>
+      <div class="warn-box" id="gloryWarn"></div>
+      <div class="row">
+        <input type="number" class="num" id="gloryRounds" value="0" min="0" max="999">
+        <span style="color:var(--muted);font-size:13px">场(0=挂到20:00)</span>
+        <button class="btn" id="gloryStart" style="background:#b8860b" disabled>开始挂机</button>
+        <button class="btn red" id="gloryStop" disabled>停止</button>
+      </div>
+      <div class="row schedrow">
+        <span class="lbl">预约启动</span>
+        <input type="text" class="txt" id="gloryWhen" placeholder="18:00 或 90(分钟后)">
+        <button class="btn ghost sm" id="glorySchedBtn">预约</button>
+        <span class="hint">到点自动开打；未到窗口则等窗口开启（仅当日有效）</span>
+      </div>
+      <div class="schedbox" id="glorySchedBox"></div>
+      <div class="live" id="gloryLive">
+        <div class="phase"><span class="pulse"></span><span id="gloryPhase">运行中…</span></div>
+        <div class="stat">
+          <div>已打<b id="gloryFought">0</b>&nbsp;/&nbsp;<span id="gloryTarget">0</span></div>
+          <div>胜利<b id="gloryWins">0</b></div>
+          <div>战败<b id="gloryLosses">0</b></div>
+          <div>异常<b id="gloryErrors">0</b></div>
+        </div>
+        <div class="detail" id="gloryDetail"></div>
+      </div>
+      <div class="result" id="gloryResult"></div>
+    </div>
+
+    <!-- 排行采集 -->
+    <div class="card">
+      <h2>荣耀排行采集 <span class="tag gray">批量建档</span></h2>
+      <div class="desc">从当前荣耀排行页开始自动翻页，把前 N 页（宗师/王者段位）玩家 OCR 识别并写入打不过名单。上次采集 40 页 = 357 人入档，可随时再采补全。</div>
+      <div class="row">
+        <input type="number" class="num" id="colPages" value="40" min="1" max="400">
+        <span style="color:var(--muted);font-size:13px">页</span>
+        <button class="btn" id="colStart">开始采集</button>
+        <button class="btn red" id="colStop" disabled>停止</button>
+      </div>
+      <div class="live" id="colLive">
+        <div class="phase"><span class="pulse"></span><span id="colPhase">采集中…</span></div>
+        <div class="detail" id="colDetail"></div>
+      </div>
+      <div class="result" id="colResult"></div>
+    </div>
+  </div>
+
+  <!-- ================= 下栏: 名单 + 历史 + 日志 ================= -->
+  <div class="lower">
+    <div>
+      <div class="card" style="margin-bottom:14px">
+        <h2>档案名单 <span class="tag gray">胜负自动归档</span></h2>
+        <div class="pillar"><span>曾战胜过 <span style="color:var(--muted);font-size:11px;font-weight:400">(战绩标签，不参与决策)</span></span><span class="cnt" id="everCnt">–</span></div>
+        <div class="pillar"><span>打不过名单 <span style="color:var(--muted);font-size:11px;font-weight:400">(不在名单即可挑战)</span></span><span class="cnt" id="noCnt">–</span>
+          <button class="btn ghost sm" onclick="toggleNoList(this)">查看</button>
+          <button class="btn ghost sm" onclick="downloadNoList()">下载</button>
+        </div>
+        <div class="listbox" id="list-no"></div>
+      </div>
+
+      <div class="card">
+        <h2>最近任务 <span class="tag gray">自动留痕 · 重启不丢</span></h2>
+        <div id="hist"></div>
+      </div>
+    </div>
+
+    <div class="card logcard">
+      <div class="loghead">运行日志（实时，含每局胜负与阶段）<span class="spacer"></span>
+        <button class="btn ghost sm" id="keyBtn" onclick="toggleKey(this)">仅看关键</button>
+        <button class="btn ghost sm" onclick="clearLog()">清屏</button>
+      </div>
+      <div id="log"></div>
+    </div>
+  </div>
+
+  <div class="foot">任务互斥：同一时间只运行一个任务 · 页面可最小化，后台任务不受影响 · 排位/争霸/采集三类流程彼此独立，各按自身状态机推进<br>预约启动由服务端定时触发（页面关掉也生效，记录在 data/schedule.json，重启不丢）<br>顶部「上次任务」条常驻显示最近一次终止原因，重启后依然可见（红条=需要人看一眼）<br><span id="verTxt" style="opacity:.7"></span></div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let logSeq=0, jobWasRunning=false, jobArenaOpen=false, keyOnly=false;
+const PAGE_VER='2026-09-22b';   // 前端版本号: 底部可见. 若与最新不一致说明浏览器缓存, Ctrl+F5
+
+/* ---------------- 工具 ---------------- */
+const TYPE_CN={arena:'全民争霸',rank:'排位赛',rank_glory:'荣耀时刻挂机',collect:'采集'};
+const REASON_CN={
+  finished:'正常完成',not_in_window:'非比赛时段结束',not_glory_window:'非荣耀时刻时段',
+  glory_done:'荣耀时刻窗口结束',bad_rounds:'参数错误',
+  nav_failed:'导航失败',stopped:'手动停止',cooldown:'10把冷却等待超限',
+  cooldown_nav_fail:'冷却后重导航失败',
+  daily_limit:'今日累计30次已满, 游戏提示明日再来 (18-20点荣耀不受限)',
+  // 排位赛 / 荣耀时刻细粒度收尾 (battler.py exit_status 全部取值)
+  antibot_kicked_nav:'防挂机答错且重导航失败',
+  antibot_giveup:'防挂机放弃',antibot_retry:'防挂机截图失败',
+  antibot_no_llm:'本地解题失败且模型不可用',
+  single_match_fail:'单人匹配点击失败',skip_fail:'跳过按钮点击失败',
+  box_fail:'第三宝箱点击失败',no_end:'等不到比赛结束',
+  no_reward:'等不到宝箱选择页',no_back:'等不到返回大厅',
+  no_battle_ui:'等跳过按钮超时',not_rank_hub:'不在排位主页',
+  no_battle_ui_after_antibot:'防挂机处理后仍等不到比赛 (已加自愈)',
+  match_rescue_loop:'匹配等待自愈超限',
+  main_city_loop:'多次被弹回主城',main_city_nav_fail:'弹回主城后重导航失败',
+  // 全民争霸 2026-09-11 新规: 行动力机制 (旧 30s 单场 CD 作废)
+  no_stamina:'连续点挑战均未进战斗 (行动力不足/界面异常), 已存现场图',
+  // 2026-09-22 新增: "窗口内自愈"的收尾码 + 游戏不在排位相关收尾码。
+  // 注意: 服务端的 /api/status.last_job 与 /api/jobs/status 已带 reason_cn/abnormal/hint,
+  // 优先用服务端文案; 这里只作老缓存/离线兜底, 保持两处一致即可。
+  window_closed:'任务时段已结束, 停止重试',
+  selfheal_stall:'窗口内长时间没能打成一局 (自愈已尽力)',
+  selfheal_cap:'自愈次数达上限',
+  not_list:'长时间不在争霸对战列表',nav_fail:'逃生/重导航失败',
+  session:'游戏会话失效且未能自动恢复',session_nav:'重新登录后导航失败',
+  game_gone:'游戏进程被回收且未能拉起',game_gone_nav:'游戏拉起后导航失败'
+};
+// 终止原因文案: 优先用服务端规范化结果 (异常码未知时服务端会原样回显并标 abnormal)
+function reasonText(r){
+  if(!r) return '';
+  return r.reason_cn || REASON_CN[r.reason] || r.reason || '';
+}
+// 上次任务结论条 (2026-09-22): 让人不在时发生的终止"一眼可见"
+function renderJobStrip(lj){
+  const el=$('jobStrip');
+  if(!el) return;
+  if(!lj||!lj.type){ el.className=''; el.innerHTML=''; return; }
+  const r=lj.result||{};
+  const isErr=lj.state==='error';
+  const bad=isErr||!!r.abnormal;
+  const tcn=lj.type_cn||TYPE_CN[lj.type]||lj.type;
+  const why=isErr?(lj.error||'未知异常'):(reasonText(r)||'未知原因');
+  const sum=(typeof r.fought==='number'&&!isErr)
+      ?` · 打 ${r.fought} 场 = 胜 ${r.wins} / 负 ${r.losses} / 异常 ${r.errors}`:'';
+  const hint=(!isErr&&r.reason_hint)?`<span class="jh">建议: ${escapeHtml(r.reason_hint)}</span>`:'';
+  el.innerHTML=`<span class="jt">上次任务 · ${escapeHtml(tcn)} · ${bad?'异常终止':'正常收尾'}</span>`
+    +`<span class="jc"> — ${escapeHtml(why)}${escapeHtml(sum)} · ${escapeHtml(fmtTime(lj.ts))} 发起</span>`
+    +hint;
+  el.className='on'+(bad?' bad':'');
+}
+const PHASE_CN={
+  scan:'扫描/准备',battle:'比赛进行',settle:'结算/领奖',
+  cooldown:'冷却等待',stamina:'等行动力恢复',done:'已完成',start:'启动',wait:'等待自动开赛'
+};
+function fmtDur(sec){
+  sec=Math.round(sec||0);
+  const m=Math.floor(sec/60),s=sec%60;
+  return m?`${m}分${s}s`:`${s}s`;
+}
+
+/* ---------------- 顶栏/状态 ---------------- */
+async function pollStatus(){
+  try{
+    const s=await (await fetch('/api/status')).json();
+    $('devTxt').textContent='设备 '+s.serial;
+    $('devDot').className='dot ok';
+    $('ptsTxt').textContent=s.points; $('capTxt').textContent=s.points_cap;
+    // 模型用量徽标 (本地方法优先, 只有本地解不了的才计一次付费调用)
+    const lb=s.llm_budget||{};
+    $('llmTxt').textContent=('calls' in lb)?lb.calls:'–';
+    $('llmCapTxt').textContent=('cap' in lb)?lb.cap:'–';
+    if(lb.calls>=lb.cap&&lb.cap){ $('llmTxt').style.color='var(--red)'; }
+    else{ $('llmTxt').style.color=''; }
+    $('dbTxt').textContent='档案 '+s.db.total+' 人 · 曾胜 '+s.db.ever_won+' · 打不过 '+s.db.cannot_beat;
+    jobArenaOpen=s.arena_open;
+    $('winTxt').textContent=s.arena_open?'比赛时段进行中 ✓':'非比赛时段 · 下次 '+s.next_open;
+    $('winDot').className=s.arena_open?'dot ok':'dot warn';
+    const warn=$('arenaWarn');
+    warn.textContent=s.arena_open?'':'当前非比赛时段（周六/日 16:00–17:00 开放），全民争霸按钮已禁用。日常排位与荣耀时刻按各自时段互斥可用。';
+    warn.className=s.arena_open?'warn-box':'warn-box on';
+    // 时段互斥提示: 荣耀时刻窗口 18-20 -> 日常排位禁用, 荣耀挂机可用; 窗口外反之
+    const rw=$('rankWarn'), gw=$('gloryWarn');
+    if(s.glory_open){
+      rw.textContent='荣耀时刻进行中（18:00-20:00），系统自动参赛中 —— 日常排位已禁用，请用右侧「荣耀时刻挂机」卡（0 场=挂到 20:00）。';
+      rw.className='warn-box on';
+      $('gloryWarn').textContent='荣耀时刻进行中 ✓ 可直接点"开始挂机"（0 场=挂到 20:00 或手动停止）';
+      gw.className='warn-box on'; gw.style.background='#f5e8c8';
+    }else{
+      rw.textContent='';
+      rw.className='warn-box';
+      gw.textContent='荣耀时刻每晚 18:00-20:00 开放（需游戏内已勾"自动参与"），当前未到窗口，请用左侧「日常排位」卡手动匹配。';
+      gw.className='warn-box on'; gw.style.background='';
+    }
+    window.__gloryOpen=s.glory_open;
+    renderScheds(s.schedule, s.schedule_last);   // 预约倒计时/等待窗口提示
+    renderJobStrip(s.last_job);                  // 上次任务终止原因 (重启后依然可见)
+    // 按钮可用态跟随窗口 (pollStatus 每 5s 刷新, 兼容首次 paint 时序)
+    const running=(await (await fetch('/api/jobs/status')).json()).running;
+    $('gloryStart').disabled = running || !s.glory_open;
+    $('rankStart').disabled  = running || s.glory_open;
+  }catch(e){$('devTxt').textContent='后端未连接';}
+}
+
+/* ---------------- 任务状态/实时面板/结果条 ---------------- */
+async function pollJob(){
+  let j;
+  try{ j=await (await fetch('/api/jobs/status')).json(); }catch(e){return;}
+  const running=!!j.running, stopping=!!j.stopping;
+  if(running){
+    jobWasRunning=true;
+  }else if(jobWasRunning){
+    jobWasRunning=false;
+    if(j.state==='error') showBanner('任务异常：'+(j.error||'未知'),'err');
+    else if(j.state==='done'&&j.result){
+      const r=j.result;
+      const reason=reasonText(r);
+      const sum=`：打 ${r.fought} 场 = 胜 ${r.wins} / 负 ${r.losses} / 异常 ${r.errors}`;
+      const who=TYPE_CN[j.type]||j.type;
+      if(r.reason==='stopped') showBanner(`${who}任务已停止（${reason}）${sum}`,'warn');
+      // 异常终止 (2026-09-22): 用红色横幅 + 带上服务端给的处理建议, 一眼看到怎么回事
+      else if(r.abnormal) showBanner(`${who}任务异常终止（${reason}）${sum}`
+                                     +`${r.reason_hint?' — 建议: '+r.reason_hint:''}`,'err');
+      else showBanner(`${who}任务${reason}${sum}`);
+    } else showBanner('任务已停止','warn');
+  }
+  paint(j, stopping);
+}
+function paint(j, stopping){
+  const running=!!j.running, type=j.type;
+  $('arenaStart').disabled = running || !jobArenaOpen;
+  $('rankStart').disabled   = running || window.__gloryOpen;
+  $('gloryStart').disabled  = running || !window.__gloryOpen;
+  $('colStart').disabled    = running;
+  $('arenaStop').disabled = !(running&&type==='arena');
+  $('rankStop').disabled  = !(running&&type==='rank');
+  $('gloryStop').disabled = !(running&&type==='rank_glory');
+  $('colStop').disabled   = !(running&&type==='collect');
+
+  // 实时面板: 只有运行中的任务类型显示 (rank_glory 独立 gloryLive)
+  const liveMap={arena:'arenaLive',rank:'rankLive',rank_glory:'gloryLive',collect:'colLive'};
+  ['arena','rank','rank_glory','collect'].forEach(t=>{
+    const el=$(liveMap[t]);
+    if(!el) return;   // 防御: id 缺失跳过, 不炸整个 paint
+    el.classList.toggle('on',running&&type===t);
+  });
+  if(running&&type){
+    const d=j.detail||{};
+    const ph=PHASE_CN[d.phase]||d.phase||'运行中';
+    const opp=d.opp?(' · 对手 '+d.opp):'';
+    // 停止请求已受理: 面板头部明确标注"停止中" (任务真正退出前一直可见)
+    const head=(stopping?'【停止中… 即将退出】 ':'')+ph+opp;
+    if(type==='arena'){
+      $('arenaPhase').textContent=head;
+      $('arenaFought').textContent=d.fought||0; $('arenaWins').textContent=d.wins||0;
+      $('arenaLosses').textContent=d.losses||0; $('arenaErrors').textContent=d.errors||0;
+      paintDetail('arenaDetail',d);
+    }else if(type==='rank'){
+      $('rankPhase').textContent=head;
+      $('rankFought').textContent=d.fought||0;
+      $('rankTarget').textContent=(j.params&&j.params.rounds)||'∞';
+      $('rankWins').textContent=d.wins||0; $('rankLosses').textContent=d.losses||0;
+      $('rankErrors').textContent=d.errors||0;
+      paintDetail('rankDetail',d);
+    }else if(type==='rank_glory'){
+      $('gloryPhase').textContent=head;
+      $('gloryFought').textContent=d.fought||0;
+      $('gloryTarget').textContent=(j.params&&j.params.rounds)||'∞';
+      $('gloryWins').textContent=d.wins||0; $('gloryLosses').textContent=d.losses||0;
+      $('gloryErrors').textContent=d.errors||0;
+      paintDetail('gloryDetail',d);
+    }else if(type==='collect'){
+      $('colPhase').textContent=head;
+      paintDetail('colDetail',d);
+    }
+  }
+  // 结果条: 任务已结束(done/error)且槽位还在 -> 常驻展示最近结果; 运行中隐藏
+  // 注意: 采集卡 HTML id 前缀是 col (colResult), 其余是 arena/rank/glory
+  ['arena','rank','rank_glory','collect'].forEach(t=>{
+    const idMap={arena:'arena',rank:'rank',rank_glory:'glory',collect:'col'};
+    const box=$(idMap[t]+'Result');
+    if(!box) return;   // 防御: id 缺失时跳过该卡, 不让单点故障炸掉整个 paint
+    const liveOn=!!(running&&type===t);
+    if(liveOn){ box.className='result'; box.innerHTML=''; return; }
+    if(j&&(j.state==='done'||j.state==='error')&&type===t){
+      paintResult(t,box,j);
+    }else{
+      box.className='result'; box.innerHTML='';
+    }
+  });
+}
+function paintDetail(id,d){
+  const el=$(id);
+  const txt=(d.detail||'').trim();
+  el.textContent=txt;
+  el.className='detail'+(txt? ' hot':'');
+}
+function paintResult(t,box,j){
+  let html;
+  if(j.state==='error'){
+    html=`<div class="resbar res-err"><b>上次任务异常</b><br>${escapeHtml(j.error||'未知错误')} · <span class="muted">${fmtTime(j.started_at)} 发起</span></div>`;
+  }else if(j.result){
+    const r=j.result;
+    const reason=reasonText(r)||j.state;
+    const cls=r.abnormal?'resbar res-err':'resbar res-done';
+    const hint=r.reason_hint?`<br><span class="muted">建议: ${escapeHtml(r.reason_hint)}</span>`:'';
+    html=`<div class="${cls}"><b>上次结果 · ${escapeHtml(reason)}</b><br>打 ${r.fought} 场 = 胜 ${r.wins} / 负 ${r.losses} / 异常 ${r.errors} · 周积分 ${r.points}<span class="muted"> · ${fmtTime(j.started_at)} 发起</span>${hint}</div>`;
+  }else{ box.className='result'; box.innerHTML=''; return; }
+  box.innerHTML=html;
+  box.className='result on';
+}
+function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+/* ---------------- 最近任务历史 ---------------- */
+// 时间显示: "2026-09-09 17:04:08" / ISO "2026-09-09T17:04:08" -> "09-09 17:04";
+// 纯时分秒(旧数据)原样返回; 异常输入返回原文
+function fmtTime(s){
+  if(!s) return '';
+  const str=String(s).replace('T',' ');
+  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(str) ? str.slice(5,16) : str;
+}
+async function pollHistory(){
+  let r;
+  try{ r=await (await fetch('/api/jobs/history')).json(); }catch(e){return;}
+  const box=$('hist');
+  const items=r.items||[];
+  if(!items.length){ box.innerHTML='<div class="empty">暂无历史任务。任务跑完一局后会自动记录在这里（含耗时与胜负）。</div>'; return; }
+  let html='';
+  items.slice().reverse().forEach(h=>{
+    const t=escapeHtml(TYPE_CN[h.type]||h.type);
+    const time=fmtTime(h.ts);
+    const dur=h.elapsed?fmtDur(h.elapsed):'';
+    let sum='', reason='';
+    if(h.state==='error'){ sum='异常中断'; reason=escapeHtml(h.error||''); }
+    else if(h.result){
+      const r=h.result;
+      const f=r.fought||0;
+      sum=`打 ${f} 场 · 胜 ${r.wins} / 负 ${r.losses} / 异常 ${r.errors}`;
+      reason=(r.abnormal?'需处理 · ':'')+escapeHtml(reasonText(r));
+    } else { sum='停止/未完成'; }
+    html+=`<div class="hrow">
+      <span class="mini ${h.type}">${t}</span>
+      <span class="mini ${h.state}">${h.state==='error'?'异常':h.state==='done'?'完成':'停止'}</span>
+      <span class="hsum">${sum}</span>
+      <span class="hreason">${reason}</span>
+      <span class="hm">${time} · ${dur}</span>
+    </div>`;
+  });
+  box.innerHTML=html;
+}
+
+/* ---------------- 任务下发 ---------------- */
+async function startJob(type){
+  const body={type,params:{}};
+  if(type==='rank') body.params.rounds=Math.min(30,Math.max(1,parseInt($('rankRounds').value)||5));
+  if(type==='rank_glory') body.params.rounds=Math.max(0,parseInt($('gloryRounds').value)||0);
+  if(type==='collect') body.params.pages=Math.min(400,Math.max(1,parseInt($('colPages').value)||40));
+  try{
+    const r=await (await fetch('/api/jobs/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    if(r.error){showBanner(r.error,'err');return;}
+    jobWasRunning=true; await pollJob();
+  }catch(e){showBanner('请求失败：'+e,'err');}
+}
+async function stopJob(){
+  let r;
+  try{ r=await (await fetch('/api/jobs/stop',{method:'POST'})).json(); }
+  catch(e){ showBanner('停止请求失败：'+e,'err'); return; }
+  if(r.error){
+    showBanner(r.error,'warn');            // 如"当前没有运行中的任务"
+    return;
+  }
+  // 停止是协作式的: 引擎在当前步骤(等待循环)结束后退出, 通常几秒内
+  showBanner('已发送停止请求：正在停止当前任务，马上退出…','warn');
+  pollJob();                                 // 立即刷新出【停止中】状态
+}
+$('arenaStart').onclick=()=>startJob('arena');
+$('rankStart').onclick =()=>startJob('rank');
+$('gloryStart').onclick=()=>startJob('rank_glory');
+$('colStart').onclick  =()=>startJob('collect');
+['arenaStop','rankStop','gloryStop','colStop'].forEach(id=>$(id).onclick=stopJob);
+
+/* ---------------- 预约启动: 到点自动开打 (页面可关, 服务端定时触发) ---------------- */
+// [任务类型, 时间输入框, 预约/取消按钮, 状态条] —— 只挂"时段受限"的两张卡
+const SCHED_TYPES=[['arena','arenaWhen','arenaSchedBtn','arenaSchedBox'],
+                   ['rank_glory','gloryWhen','glorySchedBtn','glorySchedBox']];
+const SCHED_ROUNDS={arena:()=>0, rank_glory:()=>Math.max(0,parseInt($('gloryRounds').value)||0)};
+async function postJson(url,body){
+  try{
+    return await (await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+                                   body:JSON.stringify(body||{})})).json();
+  }catch(e){ return {error:'请求失败：'+e}; }
+}
+function renderScheds(items,last){
+  const byType={};
+  (items||[]).forEach(s=>{byType[s.type]=s;});
+  window.__sched=byType; window.__schedLast=last||{};
+  SCHED_TYPES.forEach(([t,inpId,btnId,boxId])=>{
+    const box=$(boxId), btn=$(btnId);
+    if(!box||!btn) return;                       // 防御: id 变了也不炸整页
+    const s=byType[t];
+    if(s){
+      btn.textContent='取消预约';
+      const rounds=s.params&&s.params.rounds;
+      let line=`<b>已预约</b> ${s.fire_at_str} 自动开始 · ${rounds?('打 '+rounds+' 场'):'挂到窗口结束'} · 剩余 <b>${fmtDur(s.remain_sec)}</b>`;
+      if(!s.window_open){
+        line+=`<br>当前未到开放时段，将等到 <b>${s.planned_str}</b> 窗口开启后启动（还需 ${fmtDur(s.wait_sec)}）`;
+      }
+      if(s.note) line+=`<br>${escapeHtml(s.note)}`;
+      box.className='schedbox on '+(s.window_open?'s-live':'s-wait');
+      box.innerHTML=line;
+      return;
+    }
+    btn.textContent='预约';
+    const l=(last||{})[t];
+    if(l&&!l.ok){                                // 上次预约没跑成 -> 必须让人看见
+      box.className='schedbox on l-err';
+      box.innerHTML=`<b>上次预约未启动</b> · ${escapeHtml(l.msg)} <span style="opacity:.75">(${escapeHtml(l.ts)})</span>`;
+    }else if(l&&l.ok){
+      box.className='schedbox on l-live';
+      box.innerHTML=`上次预约 <b>${escapeHtml(l.ts)}</b> 已自动启动 ✓ <span style="opacity:.75">${escapeHtml(l.msg)}</span>`;
+    }else{
+      box.className='schedbox'; box.innerHTML='';
+    }
+  });
+}
+async function toggleSched(type){
+  const row=SCHED_TYPES.find(r=>r[0]===type);
+  if(!row) return;
+  const inp=$(row[1]), cn=TYPE_CN[type]||type;
+  if((window.__sched||{})[type]){                // 已有预约 -> 取消
+    if(!confirm(`取消「${cn}」的预约启动？`)) return;
+    const r=await postJson('/api/jobs/schedule/cancel',{type});
+    if(r.error){showBanner(r.error,'warn');return;}
+    showBanner('已取消预约：'+cn,'warn');
+    await pollStatus();
+    return;
+  }
+  const when=(inp.value||'').trim();
+  if(!when){showBanner('请先填预约时间：如 18:00（定点）或 90（90 分钟后）','warn'); inp.focus(); return;}
+  const r=await postJson('/api/jobs/schedule',{type,when,params:{rounds:SCHED_ROUNDS[type]()}});
+  if(r.error){showBanner(r.error,'err');return;}
+  inp.value='';
+  showBanner(`已预约「${cn}」：将于 ${(r.schedule||{}).fire_at_str} 自动开始，到点无需任何操作（页面可关）`);
+  await pollStatus();
+}
+SCHED_TYPES.forEach(([t,inpId,btnId])=>{
+  const btn=$(btnId), inp=$(inpId);
+  if(btn) btn.onclick=()=>toggleSched(t);
+  if(inp) inp.addEventListener('keydown',e=>{ if(e.key==='Enter') toggleSched(t); });
+});
+
+/* ---------------- 横幅 ---------------- */
+function showBanner(txt,mode){
+  // mode: true/'err'=红  'warn'=黄  其它(默认)=绿
+  const b=$('banner');
+  b.textContent=txt;
+  const cls=(mode===true||mode==='err')?'banner-err':(mode==='warn'?'banner-warn':'banner-done');
+  b.className=cls+' on';
+  clearTimeout(b._t);
+  b._t=setTimeout(()=>{b.className='';},12000);
+}
+// 页面脚本错误浮出来, 不再静默 (便于发现缓存旧页/新旧元素不一致等 TypeError)
+window.addEventListener('error',e=>{
+  const m=(e&&e.message)?String(e.message):'未知脚本错误';
+  if(/Script error\.?$/.test(m)&&!e.filename) return;   // 跨域匿名错误无信息可看
+  showBanner('页面脚本错误：'+m+'（若页面异常请 Ctrl+F5 强制刷新）','warn');
+});
+
+/* ---------------- 日志 ---------------- */
+const KEY_RE=/任务启动|任务结束|任务异常|任务已停止|排位赛自动打|荣耀时刻挂机开始|荣耀时刻已完成|荣耀时刻窗口|全民争霸自动赛|开始第 \d|导航|周积分|上限|收手|超时|终止|✓|✗|本局|已打满|采集完成/;
+function toggleKey(btn){
+  keyOnly=!keyOnly;
+  btn.textContent=keyOnly?'看全部':'仅看关键';
+  $('log').innerHTML='';          // 重拉: seq 从 0 会取最近 200 条, 由下面重建
+  logSeq=0; pollLog();
+}
+function clearLog(){$('log').innerHTML='';}
+async function pollLog(){
+  try{
+    const r=await (await fetch('/api/logs?after='+logSeq)).json();
+    const box=$('log');
+    if(r.seq < logSeq){
+      // 后端重启 seq 归零: 旧增量下标已失效, 清屏重新从最新 seq 追
+      box.innerHTML='';
+      logSeq=r.seq;
+    }else{
+      logSeq=r.seq;
+    }
+    const nearBottom=(box.scrollHeight-box.scrollTop-box.clientHeight)<120;
+    (r.lines||[]).forEach(l=>{
+      if(keyOnly&&!KEY_RE.test(l.msg)) return;
+      const d=document.createElement('div');
+      const isKey=KEY_RE.test(l.msg);
+      if(isKey) d.className='key';
+      const t=document.createElement('span'); t.className='ts'; t.textContent=l.ts;
+      const k=document.createElement('span'); k.className='lv-'+l.level;
+      k.textContent='['+(l.level==='info'?'·':l.level==='ok'?'胜':l.level==='warn'?'警':l.level==='error'?'错':l.level)+'] ';
+      const m=document.createElement('span'); m.textContent=l.msg;
+      if(l.level==='warn'||l.level==='error') m.className='warnline';
+      d.appendChild(t);d.appendChild(k);d.appendChild(m);
+      box.appendChild(d);
+    });
+    while(box.children.length>600) box.removeChild(box.firstChild);
+    if(nearBottom) box.scrollTop=box.scrollHeight;
+  }catch(e){}
+}
+
+/* ---------------- 名单 ---------------- */
+async function refreshDb(){
+  try{
+    const st=await (await fetch('/api/db/stats')).json();
+    $('everCnt').textContent=st.ever_won; $('noCnt').textContent=st.cannot_beat;
+  }catch(e){}
+}
+async function toggleNoList(btn){
+  const box=$('list-no');
+  if(box.classList.contains('on')){
+    box.classList.remove('on'); box.innerHTML=''; btn.textContent='查看'; return;
+  }
+  btn.textContent='收起';
+  const r=await (await fetch('/api/db/names?verdict=no&limit=500')).json();
+  box.textContent=(r.names||[]).join('\n');
+  box.classList.add('on');
+}
+async function downloadNoList(){
+  try{
+    const r=await (await fetch('/api/db/names?verdict=no&limit=99999')).json();
+    const text='# 打不过名单 (导出时间 '+new Date().toLocaleString()+'，共 '+r.total+' 人)\n'+r.names.join('\n');
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob(['\ufeff'+text],{type:'text/plain;charset=utf-8'}));
+    a.download='打不过名单.txt'; a.click(); URL.revokeObjectURL(a.href);
+  }catch(e){showBanner('下载失败','err');}
+}
+
+/* ---------------- 启动轮询 ---------------- */
+(async function boot(){
+  $('verTxt').textContent='页面 v'+PAGE_VER+' · 本页载入 '+new Date().toLocaleTimeString()+' · 如版本过旧/日志不刷新请按 Ctrl+F5';
+  await pollStatus();
+  await pollJob(); refreshDb(); pollLog(); pollHistory();
+  setInterval(pollStatus,5000);
+  setInterval(pollJob,2000);
+  setInterval(refreshDb,8000);
+  setInterval(pollLog,2000);
+  setInterval(pollHistory,6000);
+  // 浏览器对后台标签的定时器会节流(最低1次/分钟): 切回页面立即补拉一次, 感知上"实时"
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden){ pollLog(); pollJob(); pollStatus(); refreshDb(); }
+  });
+})();
+</script>
+</body>
+</html>

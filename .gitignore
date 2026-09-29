@@ -1,0 +1,53 @@
+# ============================================================
+# 圣剑脚本挂机 — 版本管理忽略规则
+# 原则: 只跟踪"代码 + 配置 + 文档 + 回归样本"。
+#       运行期产物(截图/日志/数据库/状态)一律不入库 —— 它们天天变,
+#       进了库只会让 diff 噪音淹没真正的代码改动。
+# ============================================================
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- 运行期截图: 71MB 且被例行清理, 任何一帧都可由脚本重新生成 ----
+captures/
+
+# ---- 临时产物 / 探针输出 ----
+outputs/
+qtest_pwsh_done.txt
+
+# ---- 运行期日志 (服务端 stdout/stderr、探针、异常现场) ----
+*.log
+srv_out.log
+srv_err.log
+srv_restart.log
+server_console.log
+server_console_err.log
+data/logs/
+
+# ---- 运行期状态: 任务历史 / 预约 / 额度 / 数据库 ----
+data/*.jsonl
+data/arena_records.json
+data/schedule.json
+data/llm_usage.json
+data/console_guard.log
+data/*.db
+data/*.db-*
+data/*.db.bak-*
+data/*.bak-*
+
+# ---- 手工备份 (git 接管后不再需要, 保留在磁盘但不入库) ----
+*.bak-*
+sj_bot.bak-20260911-rules/
+
+# ---- 智能体工作区(记忆/技能), 不属于"游戏脚本代码" ----
+.workbuddy/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini

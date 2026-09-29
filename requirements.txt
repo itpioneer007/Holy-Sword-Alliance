@@ -1,0 +1,4 @@
+uiautomator2>=3.0.3
+opencv-python>=4.10
+numpy>=1.26
+flask>=3.0

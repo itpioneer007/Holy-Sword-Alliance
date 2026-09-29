@@ -123,6 +123,28 @@
   .hreason{color:var(--muted)}
   .empty{color:#9ca3af;font-size:12px;padding:8px 2px}
 
+  /* 开箱奖励 (2026-09-29): 每局结算「开箱」那一刻的现场图 + 明细 */
+  .rwbar{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);
+         margin:2px 0 9px;padding:8px 11px;background:var(--green-xl);border-radius:10px}
+  .rwbar b{color:var(--green-d);font-size:15px}
+  .rwbar .spacer{flex:1}
+  .rwbox{max-height:346px;overflow-y:auto}
+  .rwrow{display:flex;align-items:flex-start;gap:9px;padding:7px 9px;border:1px solid var(--line);
+         border-radius:10px;margin-bottom:7px;background:#fff}
+  .rwrow .rwthumb{position:relative;width:88px;height:78px;flex:none;border-radius:7px;
+                  border:1px solid var(--line);overflow:hidden;background:#111827;cursor:zoom-in}
+  .rwrow .rwthumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .rwrow .rwthumb .rwzoom{position:absolute;left:0;right:0;bottom:0;text-align:center;
+                          font-size:10px;color:#e5e7eb;background:rgba(17,24,39,.72)}
+  .rwmeta{min-width:0;flex:1;font-size:12px;line-height:1.6;color:var(--muted)}
+  .rwmeta .rwtop{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px}
+  .rwitems{color:var(--text);font-weight:600;word-break:break-all}
+  .rwitems .todo{color:#9ca3af;font-weight:400}
+  .rwchip{display:inline-flex;align-items:center;gap:4px;margin:2px 7px 0 0;font-weight:600;
+          color:var(--text);background:var(--green-xl);border-radius:999px;padding:1px 8px 1px 6px}
+  .rwdot{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block;
+         border:1px solid rgba(0,0,0,.18)}
+
   /* 日志 */
   .logcard{display:flex;flex-direction:column}
   .loghead{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13px;color:var(--muted)}
@@ -302,6 +324,13 @@
         <h2>最近任务 <span class="tag gray">自动留痕 · 重启不丢</span></h2>
         <div id="hist"></div>
       </div>
+
+      <div class="card" style="margin-top:14px">
+        <h2>开箱奖励 <span class="tag gray">每局留痕 · 点图看原图</span></h2>
+        <div class="desc" style="min-height:0">每打完一局，在游戏「开箱奖励」弹窗出现的那一瞬间自动留图并记账（不需要额外等到人工在场）。奖励物按颜色区分：<b>紫=装备扫荡券 · 黄=副本扫荡券 · 绿=普通经验符文 · 蓝=钻石 · 紫卡=紫色经验卡</b>。</div>
+        <div class="rwbar" id="rwBar"><span>累计开箱 <b id="rwTotal">–</b> 次</span><span class="spacer"></span><span id="rwLast"></span></div>
+        <div class="rwbox" id="rewards"></div>
+      </div>
     </div>
 
     <div class="card logcard">
@@ -319,7 +348,7 @@
 <script>
 const $=id=>document.getElementById(id);
 let logSeq=0, jobWasRunning=false, jobArenaOpen=false, keyOnly=false;
-const PAGE_VER='2026-09-22b';   // 前端版本号: 底部可见. 若与最新不一致说明浏览器缓存, Ctrl+F5
+const PAGE_VER='2026-09-29a';   // 前端版本号: 底部可见. 若与最新不一致说明浏览器缓存, Ctrl+F5
 
 /* ---------------- 工具 ---------------- */
 const TYPE_CN={arena:'全民争霸',rank:'排位赛',rank_glory:'荣耀时刻挂机',collect:'采集'};
@@ -575,6 +604,58 @@ async function pollHistory(){
   box.innerHTML=html;
 }
 
+/* ---------------- 开箱奖励 (2026-09-29) ----------------
+   数据源: data/rewards.jsonl, 由引擎在「开箱奖励」弹窗那一刻落盘 (battler._save_reward_frame)。
+   颜色 -> 奖品名映射来自用户口述, 是唯一权威口径; 识别不出的颜色不猜, 直接显示"待识别"。 */
+const REWARD_COLORS={
+  purple:    ['#8b5cf6','装备扫荡券'],
+  yellow:    ['#eab308','副本扫荡券'],
+  green:     ['#22c55e','普通经验符文'],
+  blue:      ['#3b82f6','钻石'],
+  purplecard:['#a855f7','紫色经验卡']
+};
+function rwChips(items){
+  if(!items||!items.length) return '<span class="todo">奖励明细待识别 —— 先点图看原图</span>';
+  return items.map(it=>{
+    const c=REWARD_COLORS[it.color]||['#9ca3af','待识别'];
+    const nm=escapeHtml(it.name||c[1]);
+    const n=(it.count>1)?('×'+it.count):'';
+    return `<span class="rwchip"><i class="rwdot" style="background:${c[0]}"></i>${nm}${n}</span>`;
+  }).join('');
+}
+async function pollRewards(){
+  let r;
+  try{ r=await (await fetch('/api/rewards?limit=80')).json(); }catch(e){ return; }
+  const box=$('rewards');
+  if(!box) return;                                  // 旧缓存页面没有该节点时不炸
+  const items=r.items||[];
+  $('rwTotal').textContent=(r.total||0);
+  $('rwLast').textContent = items.length ? ('最近 '+fmtTime(items[0].ts)) : '';
+  if(!items.length){
+    box.innerHTML='<div class="empty">还没有开箱记录。排位/荣耀每打完一局，都会在「开箱奖励」弹窗出现的那一瞬间自动留图；跑到一局就会出现这里。</div>';
+    return;
+  }
+  box.innerHTML=items.map(it=>{
+    const t=escapeHtml(TYPE_CN[it.mode]||it.mode||'');
+    const v=it.verdict==='win'?'<span class="mini done">胜</span>'
+           :it.verdict==='loss'?'<span class="mini error">负</span>':'';
+    const rnd=it.round?('第 '+it.round+' 局'):'';
+    const src='/api/rewards/img?f='+encodeURIComponent(it.file||'');
+    // 缩略图取服务端裁出的"弹窗中央大图标" —— 整帧缩到 88px 宽根本看不出是什么奖励
+    return `<div class="rwrow">
+      <a class="rwthumb" href="${src}" target="_blank" rel="noopener" title="点开看整帧原图">
+        <img src="${src}&crop=icon" loading="lazy" alt="开箱奖励">
+        <span class="rwzoom">看原图</span>
+      </a>
+      <div class="rwmeta">
+        <div class="rwtop"><span class="mini ${escapeHtml(it.mode||'')}">${t}</span>${v}
+          <span>${rnd}</span><span style="margin-left:auto">${fmtTime(it.ts)}</span></div>
+        <div class="rwitems">${rwChips(it.items)}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 /* ---------------- 任务下发 ---------------- */
 async function startJob(type){
   const body={type,params:{}};
@@ -693,7 +774,7 @@ window.addEventListener('error',e=>{
 });
 
 /* ---------------- 日志 ---------------- */
-const KEY_RE=/任务启动|任务结束|任务异常|任务已停止|排位赛自动打|荣耀时刻挂机开始|荣耀时刻已完成|荣耀时刻窗口|全民争霸自动赛|开始第 \d|导航|周积分|上限|收手|超时|终止|✓|✗|本局|已打满|采集完成/;
+const KEY_RE=/任务启动|任务结束|任务异常|任务已停止|排位赛自动打|荣耀时刻挂机开始|荣耀时刻已完成|荣耀时刻窗口|全民争霸自动赛|开始第 \d|导航|周积分|上限|收手|超时|终止|✓|✗|本局|已打满|采集完成|\[战果\]|开箱奖励|异常现场/;
 function toggleKey(btn){
   keyOnly=!keyOnly;
   btn.textContent=keyOnly?'看全部':'仅看关键';
@@ -762,15 +843,16 @@ async function downloadNoList(){
 (async function boot(){
   $('verTxt').textContent='页面 v'+PAGE_VER+' · 本页载入 '+new Date().toLocaleTimeString()+' · 如版本过旧/日志不刷新请按 Ctrl+F5';
   await pollStatus();
-  await pollJob(); refreshDb(); pollLog(); pollHistory();
+  await pollJob(); refreshDb(); pollLog(); pollHistory(); pollRewards();
   setInterval(pollStatus,5000);
   setInterval(pollJob,2000);
   setInterval(refreshDb,8000);
   setInterval(pollLog,2000);
   setInterval(pollHistory,6000);
+  setInterval(pollRewards,15000);
   // 浏览器对后台标签的定时器会节流(最低1次/分钟): 切回页面立即补拉一次, 感知上"实时"
   document.addEventListener('visibilitychange',()=>{
-    if(!document.hidden){ pollLog(); pollJob(); pollStatus(); refreshDb(); }
+    if(!document.hidden){ pollLog(); pollJob(); pollStatus(); refreshDb(); pollRewards(); }
   });
 })();
 </script>

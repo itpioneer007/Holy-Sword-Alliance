@@ -40,13 +40,15 @@ r"""安装/卸载「控制台看门狗」Windows 计划任务。
 from __future__ import annotations
 
 import argparse
-import locale
 import os
-import subprocess
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from task_install_common import (  # noqa: E402
+    query_task, register_task, remove_task, verify_next_run,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 TASK_NAME = "SJBot_Console_Guard"
@@ -123,27 +125,6 @@ XML = """<?xml version="1.0" encoding="UTF-16"?>
 """
 
 
-def run(*args: str) -> subprocess.CompletedProcess:
-    """调 schtasks。
-
-    解码必须显式用 mbcs(本机 ANSI 代码页): 本环境设了 PYTHONUTF8=1, 于是
-    locale.getpreferredencoding(False) 返回 'utf-8', 而 schtasks 的错误/成功
-    信息是按控制台 ANSI 代码页(cp936)输出的 —— 用 utf-8 解会把报错变成乱码,
-    等于把错误信息吃掉 (实测 "成功: 成功创建计划任务" 显示成 "�ɹ�: ...")。
-    """
-    p = subprocess.run(list(args), capture_output=True)
-
-    def dec(b: bytes) -> str:
-        for enc in ("mbcs", locale.getpreferredencoding(False)):
-            try:
-                return b.decode(enc)
-            except (LookupError, UnicodeDecodeError):
-                continue
-        return b.decode("utf-8", errors="replace")
-
-    return subprocess.CompletedProcess(p.args, p.returncode, dec(p.stdout), dec(p.stderr))
-
-
 def build_xml(start_at: datetime, every_min: int, duration_h: float) -> str:
     """生成计划任务 XML。
 
@@ -181,14 +162,15 @@ def main() -> int:
     a = ap.parse_args()
 
     if a.check:
-        r = run("schtasks", "/query", "/tn", TASK_NAME, "/xml")
-        print(r.stdout or r.stderr)
-        return 0 if r.returncode == 0 else 1
+        ok, out = query_task(TASK_NAME)
+        print(out)
+        print("\n" + verify_next_run(TASK_NAME))
+        return 0 if ok else 1
 
     if a.remove:
-        r = run("schtasks", "/delete", "/tn", TASK_NAME, "/f")
-        print((r.stdout + r.stderr).strip())
-        return 0 if r.returncode == 0 else 1
+        ok, out = remove_task(TASK_NAME)
+        print(out)
+        return 0 if ok else 1
 
     if not GUARD.exists():
         print(f"缺少守护脚本: {GUARD}")
@@ -201,21 +183,18 @@ def main() -> int:
     start_at = datetime.strptime(f"{ANCHOR_DATE} {hh:02d}:{mm:02d}:00", "%Y-%m-%d %H:%M:%S")
 
     xml = build_xml(start_at, a.every, a.duration)
-    xml_path = Path(tempfile.gettempdir()) / f"{TASK_NAME}.xml"
-    xml_path.write_text(xml, encoding="utf-16")       # schtasks 认 UTF-16 BOM
-    print(f"XML -> {xml_path}")
     print(f"任务 {TASK_NAME}: 每日 {a.start} 起每 {a.every} 分钟一次, 覆盖 {a.duration}h"
           + ("  (=全天常驻)" if a.duration >= 24 else ""))
     print(f"  触发器: 日调度(DaysInterval=1, 无 EndBoundary => 永久) + 登录后 2 分钟")
     print(f"  执行时限: PT0S (不限, 否则会连带杀掉前台持有的控制台)")
     print(f"  动作: {PY} \"{GUARD}\"  (cwd={ROOT})")
 
-    r = run("schtasks", "/create", "/tn", TASK_NAME, "/xml", str(xml_path), "/f")
-    out = (r.stdout + r.stderr).strip()
-    print(out)
-    if r.returncode == 0:
-        print("\n下一步: 跑 `--check` 确认 NextRun 非空 (旧版就是这里为空才暴露的)。")
-    return 0 if r.returncode == 0 else r.returncode
+    ok, msg = register_task(TASK_NAME, xml)
+    print(msg)
+    if ok:
+        print("\n装完必看 (旧版就是 NextRun 为空才暴露的):")
+        print("  " + verify_next_run(TASK_NAME))
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

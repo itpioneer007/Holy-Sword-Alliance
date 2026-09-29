@@ -38,6 +38,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import re
 import subprocess
 import threading
@@ -572,6 +573,103 @@ class Battler:
             self.log("warn", f"异常现场已存: {p.name}")
         except Exception:
             pass
+
+    def _save_reward_frame(self, verdict: Optional[str]) -> Optional[str]:
+        """把「开箱奖励」弹窗的那一帧留下来, 并记一条结构化奖励明细。
+
+        时机 (关键, 别挪): 只有在 `end` 环节**已经等到「比赛结束」按钮**时, `last_img`
+        才是含奖励清单的弹窗 —— 刚点完宝箱那一瞬间还在开箱动画里, 抓到的是空弹窗。
+        这里直接复用那帧, **不额外截图** (本机单次截图 ~1~13s, 每局多截一次不划算)。
+
+        产物:
+          captures/rewards/<日期>/<HHMMSS>.png    人工可看的原图 (胜负判出后由
+                                                  _finalize_reward 补成 <HHMMSS>_win.png)
+          data/rewards.jsonl                      结构化明细, 供前端展示
+
+        为什么落 jsonl 而不是只留图: 用户要的是"打了这么久每次获得了什么奖励"的
+        **聚合视图**, 图只能一张张翻; jsonl 才能按天汇总、在页面上列表展示。
+        """
+        img = getattr(self, "last_img", None)
+        if img is None:
+            return None
+        ts = _dt.datetime.now()
+        day_dir = Path(self.cfg.capture_dir) / "rewards" / f"{ts:%Y%m%d}"
+        stamp = f"{ts:%H%M%S}"
+        # 文件名**不带胜负**: 留图这一刻 verdict 还没判出来 (见 _finalize_reward), 带上
+        # 只会得到 "_unknown", 补判后再改名又会变成 "_unknown_win" 这种丑东西。
+        name = f"{stamp}.png"
+        try:
+            day_dir.mkdir(parents=True, exist_ok=True)
+            cv2.imencode(".png", img)[1].tofile(str(day_dir / name))
+        except Exception as e:                      # 落图失败不能打断结算链
+            self.log("warn", f"奖励截图保存失败: {e!r}")
+            return None
+
+        rec = {
+            "ts": f"{ts:%Y-%m-%d %H:%M:%S}",
+            "mode": self.mode,
+            "round": self.fought + 1,
+            "verdict": verdict or "unknown",
+            "file": str((day_dir / name).relative_to(self.cfg.capture_dir)),
+        }
+        try:
+            rp = Path(self.cfg.data_dir) / "rewards.jsonl"
+            with rp.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+        # 供结算链走完后 _finalize_reward() 补判胜负 (留图此刻 verdict 多半还是 unknown)
+        self._last_reward_file = rec["file"]
+        self.log("ok", f"开箱奖励已留图: {rec['file']}  (第 {rec['round']} 局)")
+        return rec["file"]
+
+    def _finalize_reward(self, verdict: Optional[str]) -> None:
+        """结算链走完后**补判**本局胜负到刚记的那条开箱奖励上。
+
+        为什么需要: 「开箱奖励」弹窗出现在 `end` 环节, 而本局胜负要么在该环节之前的
+        结算页标题判出, 要么一直晚到 `back` 环节的战绩页大字才判出 ⇒ 留图那一刻
+        `verdict` 常是 None (实测 2026-09-29 两局都是 unknown)。补判后:
+          · `data/rewards.jsonl` 的 verdict 就地改对 (前端"胜/负"标才准);
+          · 文件名补上 `_win`/`_loss` 后缀, 让人直接翻目录也能看出胜负。
+        按 file 字段定位记录 —— 前端只认这一条, 改名后同步回写, 不会指丢。
+        """
+        rec_file = getattr(self, "_last_reward_file", None)
+        if not rec_file or verdict not in ("win", "loss"):
+            return
+        self._last_reward_file = None                  # 一局只补一次
+        try:
+            rp = Path(self.cfg.data_dir) / "rewards.jsonl"
+            if not rp.exists():
+                return
+            out, new_rel = [], None
+            for ln in rp.read_text(encoding="utf-8").splitlines():
+                if not ln.strip():
+                    continue
+                try:
+                    rec = json.loads(ln)
+                except ValueError:
+                    out.append(ln)                     # 脏行原样保留, 不吞数据
+                    continue
+                if rec.get("file") == rec_file and rec.get("verdict") in (None, "", "unknown"):
+                    old = Path(self.cfg.capture_dir) / rec_file
+                    if old.exists():
+                        newp = old.with_name(f"{old.stem}_{verdict}{old.suffix}")
+                        try:
+                            old.rename(newp)
+                            new_rel = str(newp.relative_to(self.cfg.capture_dir))
+                            rec["file"] = new_rel
+                        except OSError:
+                            pass                       # 改名失败不算错, verdict 照样改对
+                    rec["verdict"] = verdict
+                out.append(json.dumps(rec, ensure_ascii=False))
+            tmp = rp.with_name(rp.name + ".tmp")
+            tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+            tmp.replace(rp)                            # 原子替换, 断电不会留半个文件
+            if new_rel:
+                self.log("info", f"开箱奖励补判胜负: 本局{'胜' if verdict == 'win' else '负'} "
+                                 f"-> {new_rel}")
+        except Exception as e:                          # 补判失败绝不能影响收尾
+            self.log("warn", f"开箱奖励补判失败: {e!r}")
 
     # ================================================================ OCR 工具
     def _ocr_texts(self, img: np.ndarray, roi: tuple | None = None,
@@ -2725,6 +2823,8 @@ class Battler:
                     hit = self._wait_btn("end_btn.png", rk.END_ROI, rk.END_HINTS,
                                          rk.END_ROI, rk.WAIT_END_SEC, "等待比赛结束")
                     if hit:
+                        # 此刻 last_img 正是「开箱奖励」弹窗 (已含奖励清单), 顺手留图+记账
+                        self._save_reward_frame(verdict)
                         self._tap(hit["cx"], hit["cy"])
                         self.log("info", f"✓ 点击 比赛结束 @ ({hit['cx']:.0f},{hit['cy']:.0f})")
                         stage = "back"
@@ -2738,6 +2838,10 @@ class Battler:
                         if verdict is None:
                             img = self.last_img
                             v2 = self._judge_rank_result(img) if img is not None else None
+                            # 2026-09-29 修: 必须回写到 verdict —— 不回写的话, 下面"完成一局"
+                            # 的 [战果] 摘要只能拿到 None, 于是打出"第 N 局未判定"却同时
+                            # 报"累计 2 胜"的自相矛盾 (胜负明明刚从这行判出来)。
+                            verdict = v2
                             self._apply_rank_verdict(v2, "战绩页")
                         self._tap(hit["cx"], hit["cy"])
                         self.log("info", f"✓ 点击 返回大厅 @ ({hit['cx']:.0f},{hit['cy']:.0f})")
@@ -2854,6 +2958,8 @@ class Battler:
 
             # ---- 完成一局, 计数 ----
             self.fought += 1
+            # 胜负此时才最终确定 (留图那一刻还不知道) -> 补写回开箱奖励记录
+            self._finalize_reward(verdict)
             # 本局走完 = 这一族的自愈成功了: 各族计数归零, 让日志里的"第 N 次"与退避秒数
             # 反映的是**连续**自愈次数, 而不是整个任务期间的累计次数。
             # (2026-09-22: 累计语义下, 一晚每次都被自愈救回也会把计数推到上限 —— 那正是
@@ -2863,6 +2969,13 @@ class Battler:
             self.game_rescues = 0
             self.session_rescues = 0
             self.main_city_rescues = 0
+            # [战果] 每局一行结构化摘要 (2026-09-29): 用户要的"有用信息" —— 一眼看到
+            # 进度/胜负/胜率, 而不是在一堆"✓ 点击 XXX"里自己数。落盘到
+            # data/logs/bot-YYYY-MM-DD.log 后可直接 grep "^\[战果\]" 复盘整晚走势。
+            _cn = {"win": "胜", "loss": "负"}.get(verdict or "", "未判定")
+            _rate = (self.wins / self.fought * 100.0) if self.fought else 0.0
+            self.log("ok", f"[战果] 第 {self.fought} 局{_cn} | 累计 {self.fought} 局 "
+                           f"{self.wins} 胜 {self.losses} 负, 胜率 {_rate:.0f}%")
             if is_glory:
                 self._progress("scan", f"荣耀时刻已完成 {self.fought} 局")
             else:

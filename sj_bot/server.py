@@ -38,7 +38,7 @@ from sj_bot.db import OpponentDB
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 cfg = Config()
-LOG = BotLog()
+LOG = BotLog(file_dir=cfg.data_dir / "logs")   # 按日落盘 (09-29): 进程重启不再失忆
 _log = LOG  # 兼容别名
 
 JOB_CN = {"arena": "全民争霸", "rank": "日常排位",
@@ -1008,6 +1008,80 @@ def api_db_names():
 
 
 # ================================================================ API: 日志
+# ================================================================ API: 开箱奖励 (2026-09-29)
+# 数据源是引擎在"开箱奖励"弹窗那一刻落下的 data/rewards.jsonl (由
+# Battler._save_reward_frame 写入), 每行一条 {ts, mode, round, verdict, file}。
+# 用 append-only jsonl 而不是 JSON 数组: 挂机途中进程随时可能被回收, 现有几行
+# 就保住几行, 不像整体重写那样一崩全丢。
+REWARDS_JSONL = cfg.data_dir / "rewards.jsonl"
+
+# 「宝箱奖励」弹窗的裁剪 ROI (1600x900 全图绝对坐标) —— 2026-09-29 由首两张真实帧标定。
+# 弹窗位置在结算链里是固定的 (和"比赛结束(801,697)"同一套版式), 所以能写死;
+# 若哪天界面对不上, /api/rewards/img 会自动退回整帧而不是给一张错图。
+REWARD_CROPS = {
+    "icon":  (690, 298, 882, 470),      # 弹窗中央那枚大图标 (缩略图用, 看得清是啥)
+    "popup": (520, 190, 1090, 610),     # 整个「宝箱奖励」弹窗 (含标题与 xN 角标)
+}
+
+
+@app.route("/api/rewards")
+def api_rewards():
+    """最近的开箱奖励明细 (倒序)。file 字段可直接喂给 /api/rewards/img。"""
+    limit = max(1, min(int(request.args.get("limit", 40)), 300))
+    if not REWARDS_JSONL.exists():
+        return jsonify({"total": 0, "items": []})
+    rows: list[dict] = []
+    try:
+        with REWARDS_JSONL.open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue          # 半行(崩在写入中间)直接跳过, 不影响其它记录
+    except OSError as e:
+        return jsonify({"error": f"奖励记录读取失败: {e!r}"}), 500
+    return jsonify({"total": len(rows), "items": list(reversed(rows[-limit:]))})
+
+
+@app.route("/api/rewards/img")
+def api_rewards_img():
+    """按 rewards.jsonl 的 file 字段回图。限制在 captures/rewards/ 内, 只给 png。
+
+    可选 `crop=icon|popup` (2026-09-29): 存盘留的是**整帧** (要当证据, 含战斗背景与
+    三个宝箱); 但整帧缩到侧栏 130px 宽根本看不清奖励是啥。所以裁剪放在**请求时**做,
+    存证与看清两件事分开 —— 不改动磁盘上的原图。
+    """
+    rel = (request.args.get("f") or "").strip()
+    root = (cfg.capture_dir / "rewards").resolve()
+    p = (cfg.capture_dir / rel).resolve()
+    try:
+        inside = p.is_relative_to(root)     # 防 ../ 穿越
+    except ValueError:
+        inside = False
+    if not inside or p.suffix.lower() != ".png" or not p.exists():
+        return jsonify({"error": "not found"}), 404
+
+    roi = REWARD_CROPS.get((request.args.get("crop") or "").strip().lower())
+    if not roi:
+        return send_file(str(p), mimetype="image/png")
+    import cv2
+    import numpy as np
+    img = cv2.imdecode(np.fromfile(str(p), np.uint8), cv2.IMREAD_COLOR)   # 中文路径必须走 fromfile
+    if img is None:
+        return send_file(str(p), mimetype="image/png")                   # 解不开就退整帧, 不报错
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = (max(0, roi[0]), max(0, roi[1]), min(roi[2], w), min(roi[3], h))
+    if x1 <= x0 or y1 <= y0:
+        return send_file(str(p), mimetype="image/png")                   # 分辨率变了就退整帧
+    ok, buf = cv2.imencode(".png", img[y0:y1, x0:x1])
+    if not ok:
+        return send_file(str(p), mimetype="image/png")
+    return send_file(io.BytesIO(buf.tobytes()), mimetype="image/png")
+
+
 @app.route("/api/logs")
 def api_logs():
     after = int(request.args.get("after", 0))
@@ -1044,7 +1118,12 @@ def _maybe_autoopen_browser(port: int) -> None:
 
 
 if __name__ == "__main__":
-    LOG.info(f"控制台启动: 设备 {SERIAL}, 页面 http://127.0.0.1:5050")
+    # 先把今天的日志文件尾部读回内存环形缓冲 (09-29): 重启后刷新页面还能看到
+    # 重启前的日志, 而不是从空白开始 —— 这是"复盘可用"的最低要求。
+    _backfilled = LOG.load_recent(200)
+    LOG.info(f"控制台启动: 设备 {SERIAL}, 页面 http://127.0.0.1:5050"
+             + (f"  (已从今日日志回填 {_backfilled} 条)" if _backfilled else ""))
+    LOG.info(f"日志落盘: {LOG.log_file}")
     SCHED.start()          # 预约启动调度线程 (落盘的预约在重启后继续生效)
     _maybe_autoopen_browser(5050)
     app.run(host="127.0.0.1", port=5050, debug=False, use_reloader=False, threaded=True)

@@ -624,24 +624,28 @@ class Battler:
         return rec["file"]
 
     def _finalize_reward(self, verdict: Optional[str]) -> None:
-        """结算链走完后**补判**本局胜负到刚记的那条开箱奖励上。
+        """结算链走完后把本局胜负落到刚记的那条开箱奖励上 (补判 + 补文件名后缀)。
 
-        为什么需要: 「开箱奖励」弹窗出现在 `end` 环节, 而本局胜负要么在该环节之前的
-        结算页标题判出, 要么一直晚到 `back` 环节的战绩页大字才判出 ⇒ 留图那一刻
-        `verdict` 常是 None (实测 2026-09-29 两局都是 unknown)。补判后:
-          · `data/rewards.jsonl` 的 verdict 就地改对 (前端"胜/负"标才准);
-          · 文件名补上 `_win`/`_loss` 后缀, 让人直接翻目录也能看出胜负。
-        按 file 字段定位记录 —— 前端只认这一条, 改名后同步回写, 不会指丢。
+        为什么要补判: 「开箱奖励」弹窗出现在 `end` 环节, 而本局胜负要么在该环节之前的
+        **结算页标题**判出 (2026-09-29 实测第 3 局就是这种), 要么一直晚到 `back` 环节的
+        **战绩页大字**才判出 (实测前 2 局都是, 留图那刻 verdict 还是 None) ⇒ 两种时机都有。
+
+        ⚠️ 2026-09-29 踩过的坑: 最初把"改 verdict"和"改文件名"写在同一个条件里, 结果
+        胜负已在结算页判出时 (verdict 本就不是 unknown) 整个分支被跳过, **改名也一起被
+        跳过**, 于是目录里一半文件带 `_win` 一半是裸时间戳。两件事必须解耦 —— 只要这条
+        记录是我们刚写的, 文件就该补上后缀, 与它需不需要补判无关。
+
+        按 `file` 字段定位记录 (不是取最后一行): 前端只认 file, 改名后同步回写不会指丢。
         """
         rec_file = getattr(self, "_last_reward_file", None)
         if not rec_file or verdict not in ("win", "loss"):
             return
-        self._last_reward_file = None                  # 一局只补一次
+        self._last_reward_file = None                  # 一局只处理一次
         try:
             rp = Path(self.cfg.data_dir) / "rewards.jsonl"
             if not rp.exists():
                 return
-            out, new_rel = [], None
+            out, new_rel, patched = [], None, False
             for ln in rp.read_text(encoding="utf-8").splitlines():
                 if not ln.strip():
                     continue
@@ -650,24 +654,26 @@ class Battler:
                 except ValueError:
                     out.append(ln)                     # 脏行原样保留, 不吞数据
                     continue
-                if rec.get("file") == rec_file and rec.get("verdict") in (None, "", "unknown"):
-                    old = Path(self.cfg.capture_dir) / rec_file
-                    if old.exists():
+                if rec.get("file") == rec_file:
+                    if rec.get("verdict") in (None, "", "unknown"):
+                        rec["verdict"] = verdict
+                        patched = True
+                    old = Path(self.cfg.capture_dir) / rec["file"]
+                    if old.exists() and not old.stem.endswith(f"_{verdict}"):
                         newp = old.with_name(f"{old.stem}_{verdict}{old.suffix}")
                         try:
                             old.rename(newp)
                             new_rel = str(newp.relative_to(self.cfg.capture_dir))
                             rec["file"] = new_rel
                         except OSError:
-                            pass                       # 改名失败不算错, verdict 照样改对
-                    rec["verdict"] = verdict
+                            pass                       # 改名失败不算错, verdict 照样是对的
                 out.append(json.dumps(rec, ensure_ascii=False))
-            tmp = rp.with_name(rp.name + ".tmp")
-            tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
-            tmp.replace(rp)                            # 原子替换, 断电不会留半个文件
-            if new_rel:
-                self.log("info", f"开箱奖励补判胜负: 本局{'胜' if verdict == 'win' else '负'} "
-                                 f"-> {new_rel}")
+            if patched or new_rel:
+                tmp = rp.with_name(rp.name + ".tmp")
+                tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+                tmp.replace(rp)                        # 原子替换, 断电不会留半个文件
+                self.log("info", f"开箱奖励落账: 本局{'胜' if verdict == 'win' else '负'}"
+                                 + (f" -> {new_rel}" if new_rel else " (文件名已带后缀)"))
         except Exception as e:                          # 补判失败绝不能影响收尾
             self.log("warn", f"开箱奖励补判失败: {e!r}")
 

@@ -42,11 +42,13 @@ scripts/         60+ 个脚本，分五类
   live_*.py        真机端到端验证
   ensure_console.py / install_console_task.py   运维：看门狗
   daily_prep.py / install_prep_task.py          运维：每日冷启动链（起模拟器+登录+预约）
-  cleanup_captures.py / install_cleanup_task.py 运维：每月截图清理（含"同画面去重"）
+  cleanup_captures.py / install_cleanup_task.py 运维：每日截图回收（三层闸门，含硬上限）
   label_reward_icon.py                          运维：奖励图标补命名 + 历史回填
 web/index.html   控制台前端（单文件，Tailwind + 原生 JS）
 assets/          模板图 + 回归参考帧（verify_*/diag_* 依赖，勿删）
   reward_icons/    奖励图标模板（.png=模板，ref/=回归样本）
+  reward_frames/   奖励**整帧**回归样本（压缩比与回图管道，勿删）
+  modal_ref/       模态遮挡回归样本（转盘/背包/干净主城）
 data/lists/      对战名单（can_beat / cannot_beat）
 reports/         性能与事故分析报告
 ```
@@ -74,15 +76,30 @@ reports/         性能与事故分析报告
 |---|---|---|
 | `SJBot_Console_Guard` | 每 10 分钟 | 确认控制台存活，掉了就拉起并由任务实例前台持有 |
 | `SJBot_Daily_Prep` | 每天 15:40 / 17:40 | 冷启动链：起 MuMu → 等 adb → 拉起游戏 → 登录 → 登记当日预约 |
-| `SJBot_Monthly_Cleanup` | 每月 1 号 03:30 | 清过期截图：异常图 30 天 / 奖励图 365 天 / `outputs/` 30 天 |
+| `SJBot_Daily_Cleanup` | 每天 03:30 | 回收过期截图 + 硬上限兜底（见下） |
 
-截图分两档保留（`captures/rewards/**` 单独一档），奖励图**不是**永久 —— "拿到了什么"已以文字落在 `data/rewards.jsonl`（永不删、几乎不占空间），图只是佐证，留一年足够回看。
+### 体积维持 = 三层闸门
+
+`captures/` 是唯一会持续变大的目录。2026-09-29 实测：一天写了 **57 张 / 86.8 MB** 奖励整帧（1600×900 PNG，1.52 MB/张）——按此速率"留一年"就是 **30.9 GB**。单靠一个参数治不住，所以分三层，每层挡不同的东西：
+
+| 层 | 手段 | 挡什么 | 落在哪 |
+|---|---|---|---|
+| 1. 源头减量 | 奖励图存 **JPEG q88**（实测省 88%，1.51 MB → 0.19 MB） | "单张太大" | `battler.REWARD_IMG_QUALITY` |
+| 2. 按龄回收 | 异常图 30 天 / 奖励图 90 天 / `outputs/` 30 天 | "越攒越多" | `cleanup_captures.py --days/--rewards-days` |
+| 3. **硬上限** | `captures/` 超 2000 MB 就从最旧删 | "**速率突变**" | `cleanup_captures.py --max-mb` |
+
+第 3 层不是重复劳动：**保留期按时间设闸，挡不住速率变化**——落盘格式、截图频率或分辨率一改，同一个"留 365 天"就会从 1 GB 变成 30 GB。上限才是几何意义上的"不会爆"。它删除时**不碰 6 小时内的新文件**（删掉"刚刚那次异常"的现场，往往就是删掉了最想看的证据）。经验法则：`--max-mb` ≥ 稳态 × 1.5，调大保留期时要把上限一起调大，否则保留期会被上限架空。
+
+稳态估算 ≈ 奖励图 0.92 GB + 异常图 0.33 GB ≈ **1.25 GB**，上限 2000 MB 留约 1.6 倍余量。
+
+奖励图**不是**永久：用户口径是"图片每个月清一次，我只需要看开箱的奖励**是什么**就行"——"是什么"已以文字落在 `data/rewards.jsonl`（**永不删**、几乎不占空间），图只是佐证。换 JPEG 是有损，但降的是"像素保真"不是"信息量"：q88 下图标轮廓、`×N` 数量角标、弹窗标题都清晰可读，压完**再解回来重新识别**仍认得出物品名（`reward_storage_selftest` E 段实证）。
 
 ```bash
 <venv python> scripts/install_console_task.py     # 看门狗
 <venv python> scripts/install_prep_task.py        # 冷启动链
-<venv python> scripts/install_cleanup_task.py     # 每月清理
-<venv python> scripts/cleanup_captures.py --dry   # 先看清单再动手
+<venv python> scripts/install_cleanup_task.py     # 每日回收（会自动卸下旧的月度版）
+<venv python> scripts/cleanup_captures.py --dry                     # 先看清单再动手
+<venv python> scripts/cleanup_captures.py --max-mb 2000 --dry       # 单独看硬上限会删什么
 ```
 
 装完务必 `--check` 确认 **NextRun 非空**。历史事故：旧版触发器带 `<EndBoundary>`，只在安装当晚有效，次日 `NextRun` 为空、任务静默失效，表现为"到点了什么都没发生"。
@@ -124,6 +141,8 @@ reports/         性能与事故分析报告
 <venv python> scripts/nav_modal_selftest.py # 导航: 主城被全屏模态盖住 -> 按一次返回键清障
                                             # (含真实帧前置条件; --no-real 只跑桩化段)
 <venv python> scripts/anomaly_dedup_selftest.py # 异常现场图同画面去重（判据阈值 + 批量 + 运行时闸门）
+<venv python> scripts/reward_storage_selftest.py # 奖励图存储: JPEG 落盘 / 历史 PNG 改名兼容 /
+                                                 # 回图端点白名单 / 硬上限（52 项）
 
 # 真实帧回归（改了判据/阈值后必跑）
 <venv python> scripts/verify_classify_real.py

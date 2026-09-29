@@ -1023,6 +1023,10 @@ REWARD_CROPS = {
     "popup": (520, 190, 1090, 610),     # 整个「宝箱奖励」弹窗 (含标题与 xN 角标)
 }
 
+# 允许回图的扩展名 (2026-09-29 起新图存 JPEG, 历史存量仍是 PNG) —— 白名单而非黑名单
+REWARD_IMG_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+REWARD_IMG_EXTS = frozenset(REWARD_IMG_MIME)
+
 
 @app.route("/api/rewards")
 def api_rewards():
@@ -1048,11 +1052,16 @@ def api_rewards():
 
 @app.route("/api/rewards/img")
 def api_rewards_img():
-    """按 rewards.jsonl 的 file 字段回图。限制在 captures/rewards/ 内, 只给 png。
+    """按 rewards.jsonl 的 file 字段回图。限制在 captures/rewards/ 内 (png 或 jpg)。
 
     可选 `crop=icon|popup` (2026-09-29): 存盘留的是**整帧** (要当证据, 含战斗背景与
     三个宝箱); 但整帧缩到侧栏 130px 宽根本看不清奖励是啥。所以裁剪放在**请求时**做,
     存证与看清两件事分开 —— 不改动磁盘上的原图。
+
+    两个后缀并存是**有意**的 (2026-09-29): 那天把新图的落盘格式从 PNG 换成 JPEG q88
+    (1.52MB -> 0.17MB, 省 88%, 根因是实测 86.8MB/天 => 一年 30.9GB)。历史 PNG 一张都
+    没动, 所以这里必须**按后缀分发 mimetype** —— 把 .jpg 的内容声明成 image/png 虽然
+    多数浏览器会容错猜出来, 但那是靠猜, 不是靠协议。
     """
     rel = (request.args.get("f") or "").strip()
     root = (cfg.capture_dir / "rewards").resolve()
@@ -1061,24 +1070,27 @@ def api_rewards_img():
         inside = p.is_relative_to(root)     # 防 ../ 穿越
     except ValueError:
         inside = False
-    if not inside or p.suffix.lower() != ".png" or not p.exists():
+    ext = p.suffix.lower()
+    if not inside or ext not in REWARD_IMG_EXTS or not p.exists():
         return jsonify({"error": "not found"}), 404
+    mt = REWARD_IMG_MIME[ext]
 
     roi = REWARD_CROPS.get((request.args.get("crop") or "").strip().lower())
     if not roi:
-        return send_file(str(p), mimetype="image/png")
+        return send_file(str(p), mimetype=mt)
     import cv2
     import numpy as np
     img = cv2.imdecode(np.fromfile(str(p), np.uint8), cv2.IMREAD_COLOR)   # 中文路径必须走 fromfile
     if img is None:
-        return send_file(str(p), mimetype="image/png")                   # 解不开就退整帧, 不报错
+        return send_file(str(p), mimetype=mt)                            # 解不开就退整帧, 不报错
     h, w = img.shape[:2]
     x0, y0, x1, y1 = (max(0, roi[0]), max(0, roi[1]), min(roi[2], w), min(roi[3], h))
     if x1 <= x0 or y1 <= y0:
-        return send_file(str(p), mimetype="image/png")                   # 分辨率变了就退整帧
+        return send_file(str(p), mimetype=mt)                            # 分辨率变了就退整帧
+    # 裁剪结果一律回 PNG: 面积只有整帧的 1/6, 体积本来就小, 没必要再叠一层有损
     ok, buf = cv2.imencode(".png", img[y0:y1, x0:x1])
     if not ok:
-        return send_file(str(p), mimetype="image/png")
+        return send_file(str(p), mimetype=mt)
     return send_file(io.BytesIO(buf.tobytes()), mimetype="image/png")
 
 

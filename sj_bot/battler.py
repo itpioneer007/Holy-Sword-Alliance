@@ -154,6 +154,25 @@ SELFHEAL_LEGACY_MAX = 3                      # 无窗口模式(rank)的次数上
 # 24 个足够覆盖"主城 / 结算 / 转盘 / 背包 / 登录"等, 又不会随运行时长无限增长内存。
 ANOMALY_FP_KEEP = 24
 
+# ------------------------------------------------ 奖励图落盘格式 (2026-09-29)
+# 起因: 2026-09-29 一天实测写了 **57 张 / 86.8 MB** 奖励整帧 (1600x900 PNG, 1.52 MB/张)。
+# 按这个速率, 一年(365 天)保留期就是 **30.9 GB** —— 单纯缩保留期治不了本, 得从源头减量。
+#
+# 实测同一帧的压缩比 (cv2, 4 张真实奖励帧):
+#     PNG ................ 1.52 MB
+#     JPEG q92 ........... 0.23 MB   省 85%   (6.6x)
+#     JPEG q88 ........... 0.17 MB   省 88%   (8.9x)   <== 取这档
+#     JPEG q78 ........... 0.13 MB   省 91%   (11.8x)
+#
+# 为什么敢 **有损**: 这张图的唯一用途是"回看当时开出了什么奖励" —— 用户口径原话是
+# "我只需要看开宝箱的奖励是什么就行"。q88 下图标轮廓、`xN` 数量角标、弹窗标题都清晰
+# 可读 (人工逐张比对过)。它的"证据"价值是**语义层面**的(拿到了什么), 不是像素层面
+# 的取证, 所以不必用无损格式扛 8.9 倍的存储。
+#
+# 注意: **只改新图**。历史 PNG 不动 (server 端回图按后缀分发, 两种共存都认)。
+REWARD_IMG_EXT = ".jpg"                      # 落盘扩展名 (与 server 回图端点白名单联动)
+REWARD_IMG_QUALITY = 88                      # JPEG 质量; 改这里就等于改存储成本
+
 
 def make_ocr():
     """按项目统一参数创建 RapidOCR. **自测/诊断脚本请一律用它, 不要直接 `RapidOCR()`**.
@@ -623,9 +642,9 @@ class Battler:
         这里直接复用那帧, **不额外截图** (本机单次截图 ~1~13s, 每局多截一次不划算)。
 
         产物:
-          captures/rewards/<日期>/<HHMMSS>.png    人工可看的原图 (结算链走完后由
+          captures/rewards/<日期>/<HHMMSS>.jpg    人工可看的原图 (结算链走完后由
                                                   _finalize_reward 补成
-                                                  <HHMMSS>_<物品名>_<胜|负>.png)
+                                                  <HHMMSS>_<物品名>_<胜|负>.jpg)
           data/rewards.jsonl                      结构化明细, 供前端展示
 
         为什么落 jsonl 而不是只留图: 用户要的是"打了这么久每次获得了什么奖励"的
@@ -639,10 +658,14 @@ class Battler:
         stamp = f"{ts:%H%M%S}"
         # 文件名**不带胜负**: 留图这一刻 verdict 还没判出来 (见 _finalize_reward), 带上
         # 只会得到 "_unknown", 补判后再改名又会变成 "_unknown_win" 这种丑东西。
-        name = f"{stamp}.png"
+        name = f"{stamp}{REWARD_IMG_EXT}"
         try:
             day_dir.mkdir(parents=True, exist_ok=True)
-            cv2.imencode(".png", img)[1].tofile(str(day_dir / name))
+            # JPEG **有损**, 但降的是"像素保真"而不是"信息量": 见 REWARD_IMG_QUALITY 的
+            # 实测标定 —— 1.52MB -> 0.17MB, 省 88%, 而图标/角标/标题仍清晰可读。
+            cv2.imencode(REWARD_IMG_EXT, img,
+                         [int(cv2.IMWRITE_JPEG_QUALITY), REWARD_IMG_QUALITY]
+                         )[1].tofile(str(day_dir / name))
         except Exception as e:                      # 落图失败不能打断结算链
             self.log("warn", f"奖励截图保存失败: {e!r}")
             return None
@@ -726,8 +749,9 @@ class Battler:
                     if rec.get("verdict") in (None, "", "unknown"):
                         rec["verdict"] = verdict
                         patched = True
-                    # 文件名统一补成 <HHMMSS>_<物品名>_<胜负>.png —— 用户"只要看开箱奖励是
-                    # 什么", 带物品名后直接翻目录就能看懂, 不必再开图。
+                    # 文件名统一补成 <HHMMSS>_<物品名>_<胜负>.<后缀> —— 用户"只要看开箱奖励是
+                    # 什么", 带物品名后直接翻目录就能看懂, 不必再开图。后缀跟着 old.suffix
+                    # 走 (2026-09-29 起新图是 .jpg, 历史存量仍是 .png), 两种都补得上。
                     item = rec.get("item") or UNKNOWN_NAME
                     old = Path(self.cfg.capture_dir) / rec["file"]
                     if old.exists():

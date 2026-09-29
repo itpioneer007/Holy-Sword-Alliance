@@ -27,6 +27,21 @@
     python scripts/cleanup_captures.py --dry --days 7           # 换个保留期预览
     python scripts/cleanup_captures.py --days 30 --rewards-days 180
     python scripts/cleanup_captures.py --days 30 --rewards-days 0   # 奖励图也按 30 天清
+    python scripts/cleanup_captures.py --dry --no-dedup         # 只看按龄删除, 不动重复帧
+
+## 同画面去重 (2026-09-29)
+
+默认**先做一遍去重**再按龄删: `captures/` 顶层的 `anomaly_*.png` 里, **同一天 + 同一
+画面**只留最早一张。起因是 `Battler._save_anomaly` 原来每一轮重试都落一张图 ——
+实测 39 张 / 71.7MB 里 66% (41MB) 是同屏幕近重复 (一次"导航 3 连败"就是 3 张同一画面,
+主城被遮挡反复自愈能把同一屏留十几次; 09-29 18:20~18:23 那一次连着留了 11 张)。
+
+* 判据 = `sj_bot.vision.same_screen` (32x18 灰度指纹, 见那里的实测标定, 阈值 2.5);
+* **按天分批**: 同一画面出现在不同天说明"这毛病今天又犯了", 那是有效信息, 必须留;
+* **只看画面, 不看 tag**: `main_city_rescue1` 与 `main_city_loop` 若是同一屏也合并 ——
+  反正每次落盘的 **tag + 时刻都逐条写在 `data/logs/bot-*.log`** 里
+  (`异常现场已存: anomaly_<HHMMSS>_<tag>.png`), "发生过几次 / 什么故障"不会丢;
+* 丢的只是重复位图 —— 位图本身一个像素的信息都不少 (留下的那张就是同一画面)。
 """
 from __future__ import annotations
 
@@ -98,6 +113,46 @@ def _sweep(root: pathlib.Path, days: int, dry: bool, skip: tuple[str, ...] = (),
     return n, freed, samples
 
 
+def _dedup_anomaly(capture_dir: pathlib.Path, dry: bool) -> tuple[int, int, list[str]]:
+    """合并 captures/ 顶层 anomaly_*.png 里"同一天 + 同一画面"的重复帧。
+
+    每组只留**最早**那张 (文件名是 HHMMSS, 但跨天会交错, 所以按 mtime 排序才算得对)。
+    返回 (删除数, 释放字节, 示例清单)。
+    """
+    files = sorted((p for p in capture_dir.glob("anomaly_*.png") if p.is_file()),
+                   key=lambda p: p.stat().st_mtime)
+    if not files:
+        return 0, 0, []
+    from sj_bot.vision import anomaly_fingerprint, imread_any, same_screen   # 惰性: 只有这步要 cv2
+
+    kept: dict[str, list] = {}          # 天 -> [指纹]
+    n = freed = 0
+    samples: list[str] = []
+    for p in files:
+        try:
+            day = time.strftime("%Y%m%d", time.localtime(p.stat().st_mtime))
+            fp = anomaly_fingerprint(imread_any(p))
+        except Exception:               # 读不开/解不了的帧一律保留, 绝不因为读失败而删
+            continue
+        bucket = kept.setdefault(day, [])
+        if fp is not None and any(same_screen(f, fp) for f in bucket):
+            n += 1
+            sz = p.stat().st_size
+            freed += sz
+            if len(samples) < 8:
+                samples.append(f"{p.name}  ({_human(sz)})  同日同画面")
+            if not dry:
+                try:
+                    p.unlink()
+                except OSError:         # 正在被写/占用 -> 当作没删, 计数回滚
+                    n -= 1
+                    freed -= sz
+            continue
+        if fp is not None:
+            bucket.append(fp)
+    return n, freed, samples
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="清理运行期截图 (异常图 30 天 / 奖励图 365 天)")
     ap.add_argument("--days", type=int, default=30, help="异常现场图的保留天数, 默认 30")
@@ -105,6 +160,8 @@ def main() -> int:
                     help="开箱奖励图的保留天数, 默认 365 (设 0 = 也按 --days 清)")
     ap.add_argument("--dry", action="store_true", help="只列清单, 不真删")
     ap.add_argument("--keep-outputs", action="store_true", help="不碰 outputs/")
+    ap.add_argument("--no-dedup", action="store_true",
+                    help="跳过'同一天同画面只留一张'这一步 (默认会做)")
     args = ap.parse_args()
 
     if args.days < 1:
@@ -132,7 +189,16 @@ def main() -> int:
 
     total_n = total_b = 0
 
-    # 1) 异常现场图等: 排除 rewards/ 子树
+    # 1) 同一天 + 同一画面只留一张 (先做: 它是"去重", 不是"按龄淘汰")
+    if not args.no_dedup:
+        n0, b0, s0 = _dedup_anomaly(capture_dir, args.dry)
+        print(f"\n-- captures/ 同画面去重      匹配 {n0} 个, {_human(b0)}")
+        for s in s0:
+            print(f"     {s}")
+        total_n += n0
+        total_b += b0
+
+    # 2) 异常现场图等: 排除 rewards/ 子树
     n, b, samples = _sweep(capture_dir, args.days, args.dry, skip=("rewards",))
     print(f"\n-- captures/ (不含 rewards/)  匹配 {n} 个, {_human(b)}")
     for s in samples:
@@ -140,7 +206,7 @@ def main() -> int:
     total_n += n
     total_b += b
 
-    # 2) 奖励图: 单独一档保留期
+    # 3) 奖励图: 单独一档保留期
     if args.rewards_days >= 1:
         n2, b2, s2 = _sweep(capture_dir, args.rewards_days, args.dry, only="rewards")
         print(f"-- captures/rewards/          匹配 {n2} 个, {_human(b2)}  (保留 {args.rewards_days} 天)")
@@ -149,7 +215,7 @@ def main() -> int:
         total_n += n2
         total_b += b2
 
-    # 3) outputs/ 临时产物
+    # 4) outputs/ 临时产物
     if not args.keep_outputs:
         n3, b3, s3 = _sweep(outputs_dir, args.days, args.dry)
         print(f"-- outputs/                   匹配 {n3} 个, {_human(b3)}")

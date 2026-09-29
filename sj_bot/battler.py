@@ -59,6 +59,7 @@ from sj_bot.reward_icons import (
     hue_shares,
     match_icon,
 )
+from sj_bot.vision import anomaly_fingerprint, same_screen
 from sj_bot.state_machine import (
     GameFlow,
     WEEKLY_POINTS_CAP,
@@ -147,6 +148,11 @@ STALE_PRE_RETRY_SEC = 1.0
 SELFHEAL_STALL_SEC = 900                     # 窗口内连续 15 分钟没能打成一局 -> 判真故障
 SELFHEAL_BACKOFF = (2, 5, 10, 20, 30)        # 连续自愈第 1..n 次的退避秒数(超出取末值)
 SELFHEAL_LEGACY_MAX = 3                      # 无窗口模式(rank)的次数上限, 保持旧语义
+
+# ------------------------------------------------ 异常现场去重上限 (2026-09-29)
+# 每进程最多记多少个"已存过的画面指纹"。设小是有意的: 一个挂机进程内的页面种类有限,
+# 24 个足够覆盖"主城 / 结算 / 转盘 / 背包 / 登录"等, 又不会随运行时长无限增长内存。
+ANOMALY_FP_KEEP = 24
 
 
 def make_ocr():
@@ -574,13 +580,37 @@ class Battler:
         return None
 
     def _save_anomaly(self, tag: str) -> None:
-        """异常现场存截图供人工/首跑标定。"""
+        """异常现场存截图供人工/首跑标定。
+
+        同画面去重 (2026-09-29): 一次导航重试会**每轮都落一张图**, 于是"导航 3 连败"
+        就是 3 张画面几乎相同的图; 主城被遮挡反复自愈时同一屏能留十几次。实测
+        `captures/` 顶层 66% (47.3MB/71.7MB) 是同屏幕近重复 —— 它们彼此不携带新信息。
+
+        去重判据 = `vision.anomaly_fingerprint` (32x18 灰度指纹) 与该进程内**已存过的**
+        帧比较, 够像就跳过:
+          · 只比内存里记过的, 不扫盘 —— 落图前已经截了一帧, 不能再加磁盘 IO;
+          · 只在本进程内去重 ⇒ 重启后的第一张仍会留下, 于是"换个时段又犯"有痕迹;
+          · 跳过的那些**也各记一行日志**, 所以"这故障发生过几次"照样数得出来,
+            丢的只是重复的位图。
+        """
         img = self._shot_img()
         if img is None:
             return
+        fp = anomaly_fingerprint(img)
+        seen = getattr(self, "_anomaly_fps", None)
+        if seen is None:
+            seen = self._anomaly_fps = []
+        if fp is not None:
+            for old in seen:
+                if same_screen(old, fp):
+                    self.log("info", f"异常现场与已存画面相同, 不重复留图: {tag}")
+                    return
         p = Path(self.cfg.capture_dir) / f"anomaly_{_dt.datetime.now():%H%M%S}_{tag}.png"
         try:
             cv2.imencode(".png", img)[1].tofile(str(p))
+            if fp is not None:
+                seen.append(fp)
+                del seen[:-ANOMALY_FP_KEEP]          # 只留最近 N 个, 防内存增长
             self.log("warn", f"异常现场已存: {p.name}")
         except Exception:
             pass

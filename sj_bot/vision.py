@@ -33,6 +33,49 @@ def imread_any(path: str | Path) -> np.ndarray:
     return img
 
 
+# ---------------------------------------------------------------- 异常帧去重 (2026-09-29)
+# 起因: `Battler._save_anomaly` 每走到一次就把当前屏留下, 于是"导航重试 3 轮"= 3 张
+# 画面几乎相同的图, 主城被遮挡反复自愈也把同一屏留十几次。实测 captures/ 顶层
+# 66% (47.3MB / 71.7MB) 是同屏幕近重复 —— 这些帧彼此不携带新信息, 日志行才是"发生了几次".
+#   · 运行时: battler 落图前与该进程内已存的帧比, 够像就跳过 (不额外扫盘);
+#   · 事后: `scripts/cleanup_captures.py --dedup-anomaly` 按天合并历史重复帧。
+ANOMALY_FP_SIZE = (32, 18)      # 指纹分辨率: 够区分页面, 又不受噪点/逐帧抖动影响
+# 阈值标定 (2026-09-29, 18 张真实异常帧两两全比 + 合成扰动):
+#   真实重复帧   (同屏重截 / 同一天不同时刻 / 跨天同屏) 实测 0.1 ~ 1.5
+#   加 σ=16 高斯噪声                                     实测 0.58   (缩放把噪声平均掉了)
+#   首张"确实不同"的帧对 (两张内容不同的黑屏)             实测 6.01
+#   不同页面 (主城 vs 幸运大转盘)                        实测 > 20
+# 取 2.5 = 把 1.5 与 6.01 的余量均分 —— **刻意偏低**:
+#   漏合并只是多留一张图(无害), 而错合并会删掉真证据(不可逆)。宁可少删。
+ANOMALY_DEDUP_DIFF = 2.5
+
+
+def anomaly_fingerprint(img: "np.ndarray | None"):
+    """异常帧的粗指纹 = 灰度 + 缩到 32x18。**只用来判"是不是同一画面"**, 不做识别。
+
+    ⚠️ 不做均值归一化 (曾试过): 归一化能让"整体调亮/调暗"也判成同一屏, 但会让**所有
+    纯色屏**(全黑加载页 / 全白闪屏) 归一化成同一个零矩阵而互相误并 —— 得不偿失。
+    真重复帧的距离本来就 ≈0 (同一台机同一渲染重截), 不需要靠归一化去容忍亮度。
+    """
+    if img is None:
+        return None
+    try:
+        g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        return cv2.resize(g, ANOMALY_FP_SIZE, interpolation=cv2.INTER_AREA).astype(np.float32)
+    except Exception:      # 畸形帧 (非 3 通道 / 0 尺寸) -> 拿不到指纹
+        return None
+
+
+def same_screen(a, b, diff: float = ANOMALY_DEDUP_DIFF) -> bool:
+    """两个指纹是否同一画面。任一为空 => False, 即**保守地认为不同**(宁可多留图)。"""
+    if a is None or b is None:
+        return False
+    try:
+        return float(np.abs(a - b).mean()) < diff
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------- OCR 基础
 def _y_top(box) -> float:
     ys = []

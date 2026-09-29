@@ -42,7 +42,7 @@ scripts/         60+ 个脚本，分五类
   live_*.py        真机端到端验证
   ensure_console.py / install_console_task.py   运维：看门狗
   daily_prep.py / install_prep_task.py          运维：每日冷启动链（起模拟器+登录+预约）
-  cleanup_captures.py / install_cleanup_task.py 运维：每月截图清理
+  cleanup_captures.py / install_cleanup_task.py 运维：每月截图清理（含"同画面去重"）
   label_reward_icon.py                          运维：奖励图标补命名 + 历史回填
 web/index.html   控制台前端（单文件，Tailwind + 原生 JS）
 assets/          模板图 + 回归参考帧（verify_*/diag_* 依赖，勿删）
@@ -123,6 +123,7 @@ reports/         性能与事故分析报告
 <venv python> scripts/reward_selftest.py       # 开箱奖励: 识别 + 落账改名
 <venv python> scripts/nav_modal_selftest.py # 导航: 主城被全屏模态盖住 -> 按一次返回键清障
                                             # (含真实帧前置条件; --no-real 只跑桩化段)
+<venv python> scripts/anomaly_dedup_selftest.py # 异常现场图同画面去重（判据阈值 + 批量 + 运行时闸门）
 
 # 真实帧回归（改了判据/阈值后必跑）
 <venv python> scripts/verify_classify_real.py

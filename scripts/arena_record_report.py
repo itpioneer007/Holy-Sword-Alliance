@@ -77,7 +77,8 @@ def main() -> None:
     L.append(f"名单导出文件: `{out['cannot_beat']}` (共 {st['cannot_beat']} 人)")
     L.append("")
 
-    rep = ROOT / "data" / "arena_record_report_20260911.md"
+    # 报告属于"分析产物", 与 data/ 的运行期状态(名单/预约/额度)职责分开 —— 09-29 归位
+    rep = ROOT / "reports" / "arena_record_report_20260911.md"
     rep.write_text("\n".join(L), encoding="utf-8")
     print("报告 ->", rep)
     print("名单导出 ->", out["cannot_beat"], "共", st["cannot_beat"], "人")

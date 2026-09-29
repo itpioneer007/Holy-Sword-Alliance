@@ -61,7 +61,7 @@ reports/         性能与事故分析报告
 2. **扁条 ROI 高度必须 ≥192px。** 低于此高度 OCR 恒返回 0 块且**不报错**——静默死代码。新 ROI 上线前必跑 `scripts/diag_roi_audit.py`。
 3. **中文路径 + OpenCV 会静默失效。** `cv2.imwrite` 返回 `False` 而不抛异常，`cv2.imread` 传含中文的绝对路径直接返回 `None`。必须用 `cv2.imencode(...)[1].tofile()` 与 `cv2.imdecode(np.fromfile(...))`。
 4. **中文路径的计划任务必须走 XML。** `schtasks` 的 `-tr/-sd` 参数走控制台代码页，中文会被按 ANSI 误解。
-5. **页面分类优先级：session > 结算链 > 战斗页。** 半透明模态（如设置浮层）下底层文字仍可被 OCR 读出，因此守卫判据必须排在"全图回退"之前。
+5. **页面分类优先级：session > 结算链 > 战斗页。** 半透明模态（如设置浮层）下底层文字仍可被 OCR 读出，因此守卫判据必须排在"全图回退"之前。**全屏模态（「背包/宝石合成」面板、「幸运大转盘」活动页）同理**：它们中央不透明、但四周围仍露出主城建筑文字，`_is_in_main_city` 会判成立而入口「王者之巅」正好被压住 ⇒ 导航必败。识别不了就退而求其次：**"判成主城却两帧都找不到锚点"本身就是模态遮挡的稳定特征**，此时按**一次**返回键即可退回主城（`battler._nav_modal_back`，绝不连按——主城连按返回键会把游戏按退出到桌面）。
 6. **回归样本放 `assets/*_ref/`，不要放 `captures/`。** `captures/` 有例行清理，样本丢了测试会莫名其妙地崩。
 
 ---
@@ -121,6 +121,8 @@ reports/         性能与事故分析报告
 <venv python> scripts/job_reason_selftest.py
 <venv python> scripts/schedule_selftest.py
 <venv python> scripts/reward_selftest.py       # 开箱奖励: 识别 + 落账改名
+<venv python> scripts/nav_modal_selftest.py # 导航: 主城被全屏模态盖住 -> 按一次返回键清障
+                                            # (含真实帧前置条件; --no-real 只跑桩化段)
 
 # 真实帧回归（改了判据/阈值后必跑）
 <venv python> scripts/verify_classify_real.py

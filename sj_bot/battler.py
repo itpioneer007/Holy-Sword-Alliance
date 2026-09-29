@@ -216,6 +216,10 @@ class Battler:
         # P0(2026-09-13): 游戏会话失效 (token失效弹窗) / 停在登录页 的自愈计数
         self.session_rescues = 0
         self._nav_back_tried = False   # P0(09-12): 未知页面已按过一次系统返回键 (防死循环)
+        # 2026-09-29: 主城判定成立但入口锚点找不到 = 疑似被**全屏模态**盖住
+        # (「背包/宝石合成」面板、「幸运大转盘」活动页), 本轮已按过一次返回键清模态。
+        # 与 _nav_back_tried 分开: 那个管"未知页逃生", 这个管"模态遮挡", 两条路互不挤占。
+        self._nav_modal_back = False
         # P0(2026-09-13 提速): 上一局刚走完"结算链 -> 返回大厅", 下一轮起点必然是排位主页.
         # 用它开"稳态快车道", 省掉 _detect_settle_stage + _is_in_battle + _check_daily_limit
         # (只对"来源不确定"的入口才有必要, 实测合计 ~15s OCR, 正是点击迟到的余量).
@@ -1322,9 +1326,36 @@ class Battler:
                     wz = self._find_hint(img, ("王者之巅",), scale=1.0)
             if wz is None:
                 self._nav_page = "main_city"
-                self.log("warn", "主城判定成立但两帧均未找到王者之巅锚点, 无法点入口 (留图收口)")
-                self._save_anomaly("no_wangzhe_anchor")
-                return False
+                # 2026-09-29 新增 (真机实录 18:23 荣耀任务 session_nav 终止的根因):
+                # 「背包/宝石合成」面板 与 登录后弹出的「幸运大转盘」活动页都是**全屏模态**,
+                # 但其四周仍露出主城建筑文字 (荣誉殿堂/铁匠铺/王者之巅…), 于是
+                # `_is_in_main_city` 的全图回退稳定命中 ≥2 个宽词表词 ⇒ 判成主城;
+                # 而入口「王者之巅」正好被模态压住 ⇒ 同一帧里"是主城"却"没有入口"。
+                # 旧行为在此直接 return False ⇒ 3 轮重试各自截图都落在同一处 ⇒
+                # "导航连续 3 次失败" 收尾 (09-29 18:18~18:23 实录: 重登录后弹出转盘页,
+                # 5 分钟窗口全耗在盲重试上)。这类模态**不吃 back 之外的任何逃生动作**,
+                # 而按**一次**返回键即可退回主城 (真机已验证)。
+                # 安全红线: 只在本轮首次触发时按一次 (self._nav_modal_back), 且每次按完
+                # 复查游戏健康 —— 在主城**连按**返回键会把游戏按退出到模拟器桌面,
+                # 这个代价远大于一次导航失败, 所以绝不做循环连按。
+                if not self._nav_modal_back:
+                    self._nav_modal_back = True
+                    self.log("warn", "主城判定成立但两帧均未找到『王者之巅』锚点 —— "
+                                     "疑似被全屏模态(背包/活动页)盖住, 按一次返回键清模态后重试")
+                    self._save_anomaly("no_wangzhe_anchor_modal")
+                    self._press_back()
+                    self._sleep_stop(1.5)
+                    if self._check_game_health() in ("gone", "background"):
+                        self.log("warn", "返回键后游戏已不在前台, 改为拉起游戏")
+                        self._escape_relaunch_game("nav_modal")
+                    img3 = self._shot_img()
+                    if img3 is not None:
+                        img = img3
+                        wz = self._find_hint(img, ("王者之巅",), scale=1.0)
+                if wz is None:
+                    self.log("warn", "按返回键后仍未找到王者之巅锚点, 无法点入口 (留图收口)")
+                    self._save_anomaly("no_wangzhe_anchor")
+                    return False
             # 用户指引: "王者之巅"这四个字本身就是热区, 直接点文字中心,
             # 不要套用 hitbox 偏移 (88,-32) — 该公式会让点击偏离真实锚点.
             bx, by = int(wz["cx"]), int(wz["cy"])
@@ -1414,6 +1445,8 @@ class Battler:
         返回 True 时 self._nav_page 记录落点 (hub/battle/reward/...), 主循环据此接管."""
         # 每轮重试序列允许一次"返回键逃生" (未登记页面 -> 按 back 退回再试)
         self._nav_back_tried = False
+        # 同上, 每轮序列再给一次"按返回键清全屏模态 (背包/活动页)"的机会
+        self._nav_modal_back = False
         for i in range(1, tries + 1):
             if self.stop_evt.is_set():
                 return False

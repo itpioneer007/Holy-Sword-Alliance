@@ -230,17 +230,26 @@ def main() -> None:
 
     # ---------------- F. 落盘 / 恢复 ----------------
     print("\n--- F. 落盘与重启恢复 ---")
+    # ⚠️ 2026-09-29 修复 (测试腐烂): 原实现用固定的 TUE(=09-22 10:00) 当 now, 但落盘条目
+    #    带 expire_at = **该条当天 23:59**, 重启加载时拿它和**真实当前时间**比较 ->
+    #    脚本一旦跑在 09-22 之后, 这条就被「有效期已过 -> 启动时丢弃」规则吃掉,
+    #    F3/F5 恒失败。这是日期硬编码导致的, 与 JobScheduler 无关。
+    #    改为"明天 10:00"起算: 语义仍是「当天 18:00 的预约 + 到点前重启」, 但
+    #    expire_at(明天 23:59) 永远在未来 -> 测试不再随运行日期腐烂。
+    F_NOW = (_dt.datetime.now() + _dt.timedelta(days=1)).replace(
+        hour=10, minute=0, second=0, microsecond=0)
+    F_FIRE = F_NOW.replace(hour=18)
     s7, jobs7, rec7 = new_sched(tmp, "f.json")
-    s7.add("rank_glory", {"rounds": 0}, "18:00", now=TUE)
+    s7.add("rank_glory", {"rounds": 0}, "18:00", now=F_NOW)
     check("F1 落盘文件已生成", (tmp / "f.json").exists(), True)
     raw = json.loads((tmp / "f.json").read_text(encoding="utf-8"))
     check("F2 落盘内容含 items.fire_at", "fire_at" in raw["items"]["rank_glory"], True)
     s7b, jobs7b, rec7b = new_sched(tmp, "f.json")        # 模拟控制台重启
     check("F3 重启后预约仍在 (到点前重启=无缝)",
-          [hm(_dt.datetime.fromtimestamp(i["fire_at"])) for i in s7b.items(now=TUE)],
-          ["09-22 18:00"])
+          [hm(_dt.datetime.fromtimestamp(i["fire_at"])) for i in s7b.items(now=F_NOW)],
+          [hm(F_FIRE)])
     check("F4 恢复后 last 一并恢复", s7b.last(), {})
-    s7b._tick(now=TUE.replace(hour=18, minute=0, second=3))
+    s7b._tick(now=F_FIRE.replace(second=3))
     check("F5 重启后照样能在到点触发", rec7b.calls, [("rank_glory", {"rounds": 0})])
 
     # 有效期已过 -> 启动时静默丢弃 (不留僵尸预约)

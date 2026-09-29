@@ -52,6 +52,13 @@ import numpy as np
 from sj_bot.config import Config
 from sj_bot.db import OpponentDB
 from sj_bot import rank_layout as rk
+from sj_bot.reward_icons import (
+    UNKNOWN_NAME,
+    crop_icon,
+    dump_unknown,
+    hue_shares,
+    match_icon,
+)
 from sj_bot.state_machine import (
     GameFlow,
     WEEKLY_POINTS_CAP,
@@ -582,8 +589,9 @@ class Battler:
         这里直接复用那帧, **不额外截图** (本机单次截图 ~1~13s, 每局多截一次不划算)。
 
         产物:
-          captures/rewards/<日期>/<HHMMSS>.png    人工可看的原图 (胜负判出后由
-                                                  _finalize_reward 补成 <HHMMSS>_win.png)
+          captures/rewards/<日期>/<HHMMSS>.png    人工可看的原图 (结算链走完后由
+                                                  _finalize_reward 补成
+                                                  <HHMMSS>_<物品名>_<胜|负>.png)
           data/rewards.jsonl                      结构化明细, 供前端展示
 
         为什么落 jsonl 而不是只留图: 用户要的是"打了这么久每次获得了什么奖励"的
@@ -605,13 +613,31 @@ class Battler:
             self.log("warn", f"奖励截图保存失败: {e!r}")
             return None
 
+        # ---- 认物品名 (2026-09-29) ----
+        # 弹窗**只画图标不写文字** (4 张真实帧确认), 所以必须靠图标认。"认不出就记待命名,
+        # 绝不猜" —— 猜错会污染用户的奖励统计, 而待命名是诚实的, 还能被人工补上。
+        item, conf, src = match_icon(img)
+        roi = crop_icon(img)
+        unknown_rel = None
+        if item == UNKNOWN_NAME and roi is not None:
+            unk_dir = Path(self.cfg.capture_dir) / "rewards" / "_unknown"
+            fn = dump_unknown(roi, unk_dir, stamp)
+            if fn:
+                unknown_rel = str((unk_dir / fn).relative_to(self.cfg.capture_dir))
+
         rec = {
             "ts": f"{ts:%Y-%m-%d %H:%M:%S}",
             "mode": self.mode,
             "round": self.fought + 1,
             "verdict": verdict or "unknown",
+            "item": item,
+            "item_conf": round(conf, 3),
+            "item_src": src,               # 颜色 / 模板 / 无
             "file": str((day_dir / name).relative_to(self.cfg.capture_dir)),
         }
+        if unknown_rel:
+            # 单独一个字段: 前端可让用户点开看图命名; 不是"证据图", 所以不塞进 file
+            rec["unknown_file"] = unknown_rel
         try:
             rp = Path(self.cfg.data_dir) / "rewards.jsonl"
             with rp.open("a", encoding="utf-8") as f:
@@ -620,7 +646,15 @@ class Battler:
             pass
         # 供结算链走完后 _finalize_reward() 补判胜负 (留图此刻 verdict 多半还是 unknown)
         self._last_reward_file = rec["file"]
-        self.log("ok", f"开箱奖励已留图: {rec['file']}  (第 {rec['round']} 局)")
+        if item == UNKNOWN_NAME:
+            # 把色相构成打进日志 —— 补命名时不用再翻图, 看一眼比例就知道该往哪个判据上靠
+            sh = hue_shares(roi) if roi is not None else {}
+            brief = " ".join(f"{k}{v:.0f}%" for k, v in sh.items()
+                             if k in ("黄", "紫", "蓝", "青", "绿", "银灰") and v >= 5)
+            self.log("warn", f"开箱奖励图标未识别 (第 {rec['round']} 局) -> 已存 "
+                             f"{unknown_rel or '?'} 待命名; 色相: {brief or '无彩色'}")
+        else:
+            self.log("ok", f"开箱奖励: {item}  (第 {rec['round']} 局, 置信 {conf:.2f}/{src})")
         return rec["file"]
 
     def _finalize_reward(self, verdict: Optional[str]) -> None:
@@ -658,22 +692,31 @@ class Battler:
                     if rec.get("verdict") in (None, "", "unknown"):
                         rec["verdict"] = verdict
                         patched = True
+                    # 文件名统一补成 <HHMMSS>_<物品名>_<胜负>.png —— 用户"只要看开箱奖励是
+                    # 什么", 带物品名后直接翻目录就能看懂, 不必再开图。
+                    item = rec.get("item") or UNKNOWN_NAME
                     old = Path(self.cfg.capture_dir) / rec["file"]
-                    if old.exists() and not old.stem.endswith(f"_{verdict}"):
-                        newp = old.with_name(f"{old.stem}_{verdict}{old.suffix}")
-                        try:
-                            old.rename(newp)
-                            new_rel = str(newp.relative_to(self.cfg.capture_dir))
-                            rec["file"] = new_rel
-                        except OSError:
-                            pass                       # 改名失败不算错, verdict 照样是对的
+                    if old.exists():
+                        # 幂等: 用开头 6 位时间戳重建名字, 避免二次补判把后缀越叠越长
+                        m = re.match(r"^(\d{6})", old.stem)
+                        base = m.group(1) if m else old.stem
+                        want = f"{base}_{item}_{verdict}{old.suffix}"
+                        if old.name != want:
+                            newp = old.with_name(want)
+                            if not newp.exists():   # 同秒同名时保留原文件, 不覆盖
+                                try:
+                                    old.rename(newp)
+                                    new_rel = str(newp.relative_to(self.cfg.capture_dir))
+                                    rec["file"] = new_rel
+                                except OSError:
+                                    pass               # 改名失败不算错, verdict 照样是对的
                 out.append(json.dumps(rec, ensure_ascii=False))
             if patched or new_rel:
                 tmp = rp.with_name(rp.name + ".tmp")
                 tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
                 tmp.replace(rp)                        # 原子替换, 断电不会留半个文件
                 self.log("info", f"开箱奖励落账: 本局{'胜' if verdict == 'win' else '负'}"
-                                 + (f" -> {new_rel}" if new_rel else " (文件名已带后缀)"))
+                                 + (f" -> {new_rel}" if new_rel else " (文件名已是最新)"))
         except Exception as e:                          # 补判失败绝不能影响收尾
             self.log("warn", f"开箱奖励补判失败: {e!r}")
 

@@ -28,20 +28,25 @@
 sj_bot/          引擎核心
   battler.py       主循环：页面分类、战斗判定、结算链、自愈、防挂机
   server.py        Flask 控制台 + JobScheduler（到点自动下发任务）
+  reward_icons.py  开箱奖励图标识别（颜色为主判据，模板兜底）
   state_machine.py 时段闸门（荣耀 18-20 / 争霸 周六日 16-17）
   vision.py        模板匹配 / OCR / 颜色掩码
   rank_layout.py   坐标与关键词常量
   llm_client.py    防挂机交叉作答的模型调用
   collector.py     挑战记录采集
   db.py            对战记录库
-scripts/         58 个脚本，分四类
+scripts/         60+ 个脚本，分五类
   *_selftest.py    离线自测（纯逻辑，不需要设备）
   verify_*.py      真实帧回归验证（改判据/阈值后必跑）
   diag_*.py        诊断探针
   live_*.py        真机端到端验证
   ensure_console.py / install_console_task.py   运维：看门狗
+  daily_prep.py / install_prep_task.py          运维：每日冷启动链（起模拟器+登录+预约）
+  cleanup_captures.py / install_cleanup_task.py 运维：每月截图清理
+  label_reward_icon.py                          运维：奖励图标补命名 + 历史回填
 web/index.html   控制台前端（单文件，Tailwind + 原生 JS）
 assets/          模板图 + 回归参考帧（verify_*/diag_* 依赖，勿删）
+  reward_icons/    奖励图标模板（.png=模板，ref/=回归样本）
 data/lists/      对战名单（can_beat / cannot_beat）
 reports/         性能与事故分析报告
 ```
@@ -63,15 +68,43 @@ reports/         性能与事故分析报告
 
 ## 定时与无人值守
 
-`scripts/install_console_task.py` 安装计划任务 `SJBot_Console_Guard`，每 10 分钟确认控制台存活，掉了就拉起并由任务实例持有。
+三个计划任务，各自装一次即永久有效（**都不带 `<EndBoundary>`**）：
+
+| 任务 | 频率 | 作用 |
+|---|---|---|
+| `SJBot_Console_Guard` | 每 10 分钟 | 确认控制台存活，掉了就拉起并由任务实例前台持有 |
+| `SJBot_Daily_Prep` | 每天 15:40 / 17:40 | 冷启动链：起 MuMu → 等 adb → 拉起游戏 → 登录 → 登记当日预约 |
+| `SJBot_Monthly_Cleanup` | 每月 1 号 03:30 | 清 `captures/` 过期异常图与 `outputs/` 临时产物 |
 
 ```bash
-<venv python> scripts/install_console_task.py            # 安装（永久有效，装一次即可）
-<venv python> scripts/install_console_task.py --check    # 查询
-<venv python> scripts/install_console_task.py --remove   # 卸载
+<venv python> scripts/install_console_task.py     # 看门狗
+<venv python> scripts/install_prep_task.py        # 冷启动链
+<venv python> scripts/install_cleanup_task.py     # 每月清理
 ```
 
 装完务必 `--check` 确认 **NextRun 非空**。历史事故：旧版触发器带 `<EndBoundary>`，只在安装当晚有效，次日 `NextRun` 为空、任务静默失效，表现为"到点了什么都没发生"。
+
+---
+
+## 开箱奖励
+
+「宝箱奖励」弹窗**只画图标不写物品名**，所以由 `sj_bot/reward_icons.py` 识别后把物品名写进 `data/rewards.jsonl`，控制台「开箱奖励」卡片按名字展示并做今日聚合。
+
+判据是**颜色为主、模板兜底**（不是纯模板匹配）：
+
+- 纯灰度模板匹配不够稳 —— 屏蔽角标后「紫卷轴 vs 紫卡片」仍拿 0.871，而「金卷轴 vs 紫卷轴」拿 0.858，同类自身才 1.000，余量只有 0.13。根因是这几种卡片共用同一套底版（金边框 + 紫内底），只有图案本体不同。
+- 改按用户给的颜色口径后，「紫卷轴 vs 紫卡片」的**银灰占比差 160 倍**（0.2% vs 33.4%，后者是三张银灰卡牌）。
+- 右下角「×N」数量角标会变（实测 ×2、×4），匹配与取色前**必须屏蔽**，否则同一物品换个数量自匹配掉到 0.753。
+
+认不出的记「待命名」并落 `captures/rewards/_unknown/`，**绝不猜**。补命名流程：
+
+```bash
+<venv python> scripts/label_reward_icon.py --list      # 看待命名队列
+<venv python> scripts/label_reward_icon.py --promote <图标.png> <模板名>
+<venv python> scripts/label_reward_icon.py --backfill  # 回填全部历史记录
+```
+
+标定与诊断：`scripts/diag_reward_icons.py [--dump --emit --hue]`。
 
 ---
 
@@ -84,6 +117,7 @@ reports/         性能与事故分析报告
 <venv python> scripts/classify_page_selftest.py
 <venv python> scripts/job_reason_selftest.py
 <venv python> scripts/schedule_selftest.py
+<venv python> scripts/reward_selftest.py       # 开箱奖励: 识别 + 落账改名
 
 # 真实帧回归（改了判据/阈值后必跑）
 <venv python> scripts/verify_classify_real.py

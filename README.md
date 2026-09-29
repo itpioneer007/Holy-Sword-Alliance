@@ -74,12 +74,15 @@ reports/         性能与事故分析报告
 |---|---|---|
 | `SJBot_Console_Guard` | 每 10 分钟 | 确认控制台存活，掉了就拉起并由任务实例前台持有 |
 | `SJBot_Daily_Prep` | 每天 15:40 / 17:40 | 冷启动链：起 MuMu → 等 adb → 拉起游戏 → 登录 → 登记当日预约 |
-| `SJBot_Monthly_Cleanup` | 每月 1 号 03:30 | 清 `captures/` 过期异常图与 `outputs/` 临时产物 |
+| `SJBot_Monthly_Cleanup` | 每月 1 号 03:30 | 清过期截图：异常图 30 天 / 奖励图 365 天 / `outputs/` 30 天 |
+
+截图分两档保留（`captures/rewards/**` 单独一档），奖励图**不是**永久 —— "拿到了什么"已以文字落在 `data/rewards.jsonl`（永不删、几乎不占空间），图只是佐证，留一年足够回看。
 
 ```bash
 <venv python> scripts/install_console_task.py     # 看门狗
 <venv python> scripts/install_prep_task.py        # 冷启动链
 <venv python> scripts/install_cleanup_task.py     # 每月清理
+<venv python> scripts/cleanup_captures.py --dry   # 先看清单再动手
 ```
 
 装完务必 `--check` 确认 **NextRun 非空**。历史事故：旧版触发器带 `<EndBoundary>`，只在安装当晚有效，次日 `NextRun` 为空、任务静默失效，表现为"到点了什么都没发生"。

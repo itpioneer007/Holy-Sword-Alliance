@@ -4,12 +4,15 @@ r"""安装/卸载「每月截图清理」Windows 计划任务 (2026-09-29)。
 
     "之后我想要实现图片的每个月清一次, 我只需要看开宝箱的奖励是什么就行。"
 
-`captures/` 里除了**开箱奖励图** (那是"我拿到了什么"的凭据, 永久留), 其余都是异常现场
-截图 —— 每张 2.7MB 的全屏图, 一天十几张就是几十 MB。所以每月 1 号凌晨跑一次:
+`captures/` 里分两档: 异常现场截图 (每张 2.7MB 的全屏图, 一天十几张就是几十 MB) 与
+开箱奖励图。每月 1 号凌晨跑一次, 两档各按自己的保留期清:
 
-    captures/rewards/**   永久保留
-    captures/ 其它       超过 --days 天删
-    outputs/              临时调试产物, 同样按天清
+    captures/ 其它        超过 --days 天删 (默认 30)
+    captures/rewards/**   超过 --rewards-days 天删 (默认 365)
+    outputs/              临时调试产物, 按 --days 清
+
+奖励图**不是永久保留**, 因为"拿到了什么"这件事已经以文字落在 `data/rewards.jsonl`
+(物品名 + 胜负 + 时间), 那份记录永不删、几乎不占空间; 图只是佐证, 留一年足够回看。
 
 为什么选凌晨 03:30
     避开通盘三个自动时段 (争霸 周末 16:00-17:00 / 荣耀 18:00-20:00 / 排位随时)。而且此刻
@@ -24,12 +27,13 @@ r"""安装/卸载「每月截图清理」Windows 计划任务 (2026-09-29)。
     次月永久失效。`ScheduleByMonth` 下它是可选元素, 不写即永久按年重复。
 
 用法
-    <venv python> scripts\install_cleanup_task.py                # 安装 (保留 30 天)
-    <venv python> scripts\install_cleanup_task.py --days 45      # 改保留期
-    <venv python> scripts\install_cleanup_task.py --at 04:00     # 改时刻
-    <venv python> scripts\install_cleanup_task.py --check        # 查询
-    <venv python> scripts\install_cleanup_task.py --remove       # 卸载
-    <venv python> scripts\install_cleanup_task.py --run-now      # 立刻手动跑一次
+    <venv python> scripts\install_cleanup_task.py                    # 安装 (30 / 365 天)
+    <venv python> scripts\install_cleanup_task.py --days 45          # 改异常图保留期
+    <venv python> scripts\install_cleanup_task.py --rewards-days 180 # 改奖励图保留期
+    <venv python> scripts\install_cleanup_task.py --at 04:00         # 改时刻
+    <venv python> scripts\install_cleanup_task.py --check            # 查询
+    <venv python> scripts\install_cleanup_task.py --remove           # 卸载
+    <venv python> scripts\install_cleanup_task.py --run-now          # 立刻手动跑一次 (--dry)
 """
 from __future__ import annotations
 
@@ -57,7 +61,7 @@ XML = """<?xml version="1.0" encoding="UTF-16"?>
   <RegistrationInfo>
     <Date>{now}</Date>
     <Author>{author}</Author>
-    <Description>每月 {day} 号 {at} 清理运行期截图: captures/ 下超过 {days} 天的异常现场图与 outputs/ 临时产物一并删除, 但 captures/rewards/ 里的开箱奖励图永久保留。永久有效 (无 EndBoundary)。</Description>
+    <Description>每月 {day} 号 {at} 清理运行期截图: captures/ 下超过 {days} 天的异常现场图与 outputs/ 临时产物一并删除; 开箱奖励图另按 {rdays} 天保留 (物品名另存在 data/rewards.jsonl, 永不删)。永久有效 (无 EndBoundary)。</Description>
     <URI>\\{task}</URI>
   </RegistrationInfo>
   <Triggers>
@@ -104,7 +108,7 @@ XML = """<?xml version="1.0" encoding="UTF-16"?>
   <Actions Context="Author">
     <Exec>
       <Command>{py}</Command>
-      <Arguments>"{clean}" --days {days}</Arguments>
+      <Arguments>"{clean}" --days {days} --rewards-days {rdays}</Arguments>
       <WorkingDirectory>{root}</WorkingDirectory>
     </Exec>
   </Actions>
@@ -112,7 +116,7 @@ XML = """<?xml version="1.0" encoding="UTF-16"?>
 """
 
 
-def build_xml(at: str, day: int, days: int) -> str:
+def build_xml(at: str, day: int, days: int, rdays: int) -> str:
     user = os.environ.get("USERNAME", "")
     comp = os.environ.get("COMPUTERNAME", "")
     return XML.format(
@@ -122,6 +126,7 @@ def build_xml(at: str, day: int, days: int) -> str:
         at=at,
         day=day,
         days=days,
+        rdays=rdays,
         start=f"{ANCHOR_DATE}T{at}:00",
         user=f"{comp}\\{user}",
         py=str(PY),
@@ -134,14 +139,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--at", default="03:30", help="触发时刻 (默认 03:30)")
     ap.add_argument("--day", type=int, default=1, help="每月几号 (默认 1)")
-    ap.add_argument("--days", type=int, default=30, help="保留多少天 (默认 30)")
+    ap.add_argument("--days", type=int, default=30, help="异常图保留天数 (默认 30)")
+    ap.add_argument("--rewards-days", type=int, default=365, help="奖励图保留天数 (默认 365)")
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--remove", action="store_true")
-    ap.add_argument("--run-now", action="store_true", help="立刻跑一次清理脚本 (不建任务)")
+    ap.add_argument("--run-now", action="store_true", help="立刻跑一次清理脚本 (--dry 预览)")
     a = ap.parse_args()
 
     if a.run_now:
-        r = run(str(PY), str(CLEAN), "--days", str(a.days), "--dry")
+        r = run(str(PY), str(CLEAN), "--days", str(a.days),
+                "--rewards-days", str(a.rewards_days), "--dry")
         print("--dry 预览:\n" + (r.stdout or r.stderr))
         return 0
 
@@ -163,11 +170,11 @@ def main() -> int:
         print(f"缺少解释器: {PY}")
         return 2
 
-    xml = build_xml(a.at, a.day, a.days)
+    xml = build_xml(a.at, a.day, a.days, a.rewards_days)
     print(f"任务 {TASK_NAME}:")
     print(f"  触发: 每月 {a.day} 号 {a.at}  (无 EndBoundary => 永久)")
-    print(f"  动作: {PY} \"{CLEAN}\" --days {a.days}  (cwd={ROOT})")
-    print(f"  保留: captures/rewards/ 永久; 其余超过 {a.days} 天删; outputs/ 同规则")
+    print(f"  动作: {PY} \"{CLEAN}\" --days {a.days} --rewards-days {a.rewards_days}")
+    print(f"  保留: 异常图 {a.days} 天; 奖励图 {a.rewards_days} 天; outputs/ 按 {a.days} 天")
     print("  执行时限: PT1H   StartWhenAvailable: true (关机错过的会补跑)")
 
     ok, msg = register_task(TASK_NAME, xml)
